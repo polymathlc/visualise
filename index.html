@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="feed.css">
   <link rel="stylesheet" href="studio.css">
+  <link rel="stylesheet" href="snap.css">
   <link rel="modulepreload" href="app.js">
 </head>
 <body>
@@ -30,6 +31,7 @@
 
   <nav class="tabs" role="tablist" aria-label="Sections">
     <button type="button" class="tab" role="tab" id="tabFeed" aria-controls="feedView" aria-selected="true">🧮 Questions</button>
+    <button type="button" class="tab" role="tab" id="tabSnap" aria-controls="snapView" aria-selected="false">📸 Snap &amp; Play</button>
     <button type="button" class="tab" role="tab" id="tabStudio" aria-controls="studioView" aria-selected="false">🛠 Parent Studio</button>
   </nav>
 
@@ -58,6 +60,15 @@
         <strong>Remember:</strong> if a question feels confusing, draw it. A bar, a line, a few dots — the picture
         usually tells you whether to add, take away, multiply or divide.
       </div>
+    </section>
+
+    <!-- ───────────────────────── SNAP & PLAY ───────────────────────── -->
+    <section class="view" id="snapView" role="tabpanel" aria-labelledby="tabSnap" hidden>
+      <div class="intro stagger">
+        <h1>Snap &amp; Play</h1>
+        <p class="subtitle">Paste a screenshot of any question. The AI builds a little app to play with until it makes sense.</p>
+      </div>
+      <div class="snap" id="snap"></div>
     </section>
 
     <!-- ───────────────────────── PARENT STUDIO ───────────────────────── -->

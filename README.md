@@ -13,6 +13,12 @@ Live site: https://polymathlc.github.io/visualise/
 - Tap **Picture it**, touch the bar model / number line / groups, then answer.
 - Topic chips filter the feed; the strip shows answered, correct and streak.
 
+## Snap & Play tab
+Paste (Ctrl/Cmd+V), drop or pick a screenshot of any question. `gpt-6-luna` builds a
+whole interactive mini app for it, shown large with full screen, rebuild with a tweak,
+edit code, download as .html, and save to the library and feed. Past builds stay in
+this browser.
+
 ## For the parent (Parent Studio tab)
 1. **Add a question**: question text, accepted answers, unit, hint, topic, optional
    screenshot, and a picture (built-in visualiser, one from your library, or its own code).

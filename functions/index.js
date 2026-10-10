@@ -1,19 +1,29 @@
 // Firebase Cloud Function: visualiseAi
 //
-// POST {imageDataUrl, note} -> {ok:true, result:{name, questionText, answers, hint, code}}
+// POST {imageDataUrl, note, mode?} ->
+//   mode 'visualiser' (default): {ok:true, result:{name, questionText, answers, hint, code}}
+//   mode 'webapp' (Snap & Play): {ok:true, result:{title, questionText, answers, hint, html}}
 // The OpenAI key lives only in the Firebase secret OPENAI_API_KEY
 // (firebase functions:secrets:set OPENAI_API_KEY). It is never sent to the browser.
 
 import { onRequest } from 'firebase-functions/v2/https';
 import { defineSecret, defineString } from 'firebase-functions/params';
 import { logger } from 'firebase-functions';
-import { DEFAULT_MODEL, buildChatBody, cleanVisualiserReply } from './prompt.js';
+import {
+  DEFAULT_MODEL, buildChatBody, cleanVisualiserReply,
+  buildWebappChatBody, cleanWebappReply,
+} from './prompt.js';
 
 const openaiKey = defineSecret('OPENAI_API_KEY');
 const openaiModel = defineString('VISUALISE_OPENAI_MODEL', { default: DEFAULT_MODEL });
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 const OPENAI_TIMEOUT_MS = 100000;
+const OPENAI_WEBAPP_TIMEOUT_MS = 170000;   // a whole web app is a much longer reply
+const MODES = {
+  visualiser: { build: buildChatBody, clean: cleanVisualiserReply, timeoutMs: OPENAI_TIMEOUT_MS },
+  webapp: { build: buildWebappChatBody, clean: cleanWebappReply, timeoutMs: OPENAI_WEBAPP_TIMEOUT_MS },
+};
 const MAX_IMAGE_CHARS = 7 * 1024 * 1024;   // ~5 MB of base64 image data
 const MAX_NOTE_CHARS = 2000;
 const IMAGE_DATA_URL = /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=\s]+$/;
@@ -49,7 +59,8 @@ function fail(res, status, error, extra) {
   res.status(status).json({ ok: false, error, ...(extra || {}) });
 }
 
-async function callOpenAI({ imageDataUrl, note }) {
+async function callOpenAI({ imageDataUrl, note, mode }) {
+  const spec = MODES[mode] || MODES.visualiser;
   const key = openaiKey.value();
   if (!key) {
     const err = new Error('The server has no OpenAI key configured.');
@@ -61,8 +72,8 @@ async function callOpenAI({ imageDataUrl, note }) {
     response = await fetch(OPENAI_URL, {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(OPENAI_TIMEOUT_MS),
-      body: JSON.stringify(buildChatBody({ imageDataUrl, note, model: openaiModel.value() })),
+      signal: AbortSignal.timeout(spec.timeoutMs),
+      body: JSON.stringify(spec.build({ imageDataUrl, note, model: openaiModel.value() })),
     });
   } catch (cause) {
     const timedOut = cause && (cause.name === 'TimeoutError' || cause.name === 'AbortError');
@@ -99,7 +110,7 @@ async function callOpenAI({ imageDataUrl, note }) {
     throw err;
   }
   try {
-    return cleanVisualiserReply(content);
+    return spec.clean(content);
   } catch (cause) {
     const err = new Error(cause.message || 'The AI reply could not be used.');
     err.status = 502;
@@ -112,7 +123,7 @@ export const visualiseAi = onRequest(
     region: 'us-central1',
     secrets: [openaiKey],
     cors: ALLOWED_ORIGINS,
-    timeoutSeconds: 120,
+    timeoutSeconds: 200,
     memory: '256MiB',
     maxInstances: 3,
     concurrency: 20,
@@ -134,6 +145,8 @@ export const visualiseAi = onRequest(
 
     const imageDataUrl = typeof body.imageDataUrl === 'string' ? body.imageDataUrl.trim() : '';
     const note = typeof body.note === 'string' ? body.note.slice(0, MAX_NOTE_CHARS) : '';
+    const mode = body.mode == null || body.mode === '' ? 'visualiser' : String(body.mode);
+    if (!Object.prototype.hasOwnProperty.call(MODES, mode)) { fail(res, 400, 'Unknown mode "' + mode.slice(0, 20) + '".'); return; }
     if (!imageDataUrl) { fail(res, 400, 'Add a screenshot of the question first.'); return; }
     if (imageDataUrl.length > MAX_IMAGE_CHARS) { fail(res, 413, 'The screenshot is too large. Crop or shrink it and try again.'); return; }
     if (!IMAGE_DATA_URL.test(imageDataUrl.slice(0, 64)) || !/^data:image\/[a-z]+;base64,/.test(imageDataUrl)) {
@@ -143,11 +156,11 @@ export const visualiseAi = onRequest(
 
     const started = Date.now();
     try {
-      const result = await callOpenAI({ imageDataUrl, note });
-      logger.info('visualiseAi ok', { ms: Date.now() - started, codeChars: result.code.length });
+      const result = await callOpenAI({ imageDataUrl, note, mode });
+      logger.info('visualiseAi ok', { mode, ms: Date.now() - started, codeChars: (result.code || result.html || '').length });
       res.status(200).json({ ok: true, result });
     } catch (err) {
-      logger.error('visualiseAi failed', { ms: Date.now() - started, message: err.message });
+      logger.error('visualiseAi failed', { mode, ms: Date.now() - started, message: err.message });
       fail(res, err.status || 500, err.message || 'Something went wrong.');
     }
   }
