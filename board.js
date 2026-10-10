@@ -10,11 +10,12 @@
 // box holds runs in <iframe sandbox="allow-scripts"> with srcdoc: an opaque
 // origin, so a generated app can never read this site's storage or DOM.
 
-import { readStore, writeStore, uid, escapeHtml, el, showToast, readImageFile } from './core.js?v=1.2.2';
-import { generateWebapp, tweakWebapp, saveAiConfig, getAiConfig, MODEL_CHOICES } from './ai.js?v=1.2.2';
+import { readStore, writeStore, uid, escapeHtml, el, showToast, readImageFile } from './core.js?v=1.3.0';
+import { generateWebapp, tweakWebapp, saveAiConfig, getAiConfig, MODEL_CHOICES, enhanceDiagram } from './ai.js?v=1.3.0';
 
 const BLOCKS_KEY = 'vis_blocks';
 const MAX_BLOCKS = 200;
+const MAX_DIAGRAM_CHARS = 700000;
 const KEY_ERROR_CODES = new Set(['no-key', 'proxy-unreachable', 'bad-key']);
 // Luna is quick and cheap; Sol 6.1 thinks harder for tricky questions.
 const DEFAULT_MODEL = 'gpt-6-luna';
@@ -46,6 +47,9 @@ function cleanBlock(b) {
     model: cleanModel(b.model),
     tweaks: Array.isArray(b.tweaks) ? b.tweaks.map((t) => String(t).slice(0, 400)).slice(-10) : [],
     createdAt: Number(b.createdAt) || Date.now(),
+    updatedAt: Number(b.updatedAt) || Number(b.createdAt) || 0,
+    diagram: typeof b.diagram === 'string' && /^data:image\//.test(b.diagram) && b.diagram.length < MAX_DIAGRAM_CHARS
+      ? b.diagram : '',
   };
 }
 
@@ -55,10 +59,46 @@ function loadBlocks() {
   return list.map(cleanBlock).filter(Boolean);
 }
 
+// Listeners told after every successful save (the cloud sync hangs off this).
+const savedListeners = [];
+let activeBoard = null;
+
+/** Call fn(list) after every save of the board. Returns an unsubscribe. */
+export function onBlocksSaved(fn) {
+  if (typeof fn !== 'function') return () => {};
+  savedListeners.push(fn);
+  return () => { const i = savedListeners.indexOf(fn); if (i >= 0) savedListeners.splice(i, 1); };
+}
+
+/** The current saved list (cleaned copies). */
+export function getBoardBlocks() {
+  return activeBoard ? activeBoard.getBlocks() : loadBlocks();
+}
+
+/** Replace the whole list (e.g. after a cloud merge) and re-render. Does not notify listeners. */
+export function setBoardBlocks(list) {
+  const clean = (Array.isArray(list) ? list : []).map(cleanBlock).filter(Boolean).slice(0, MAX_BLOCKS);
+  if (!writeLocal(clean)) return false;
+  if (activeBoard) activeBoard.replace(clean);
+  return true;
+}
+
+function writeLocal(list) {
+  try {
+    localStorage.setItem(BLOCKS_KEY, JSON.stringify(list.slice(0, MAX_BLOCKS)));
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 /** Writes the list; returns false (and says so) when the browser is full. */
 function saveBlocks(list) {
   try {
     localStorage.setItem(BLOCKS_KEY, JSON.stringify(list.slice(0, MAX_BLOCKS)));
+    for (const fn of savedListeners.slice()) {
+      try { fn(list.slice(0, MAX_BLOCKS)); } catch (err) { console.error(err); }
+    }
     return true;
   } catch (_) {
     // writeStore swallows errors too; try it once more for its own handling.
@@ -110,6 +150,197 @@ function stemOf(text, options) {
   const s = String(text || '');
   const first = s.search(/(?:^|\s|\n)\(?(1|A)[).:]\s+/);
   return first > 0 ? s.slice(0, first).trim() : s;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Checking a child's answer
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Lower-case, collapse whitespace, drop thousands commas inside numbers and
+ * strip punctuation (keeping the decimal point and a leading minus sign).
+ */
+export function normaliseAnswer(value) {
+  let s = String(value == null ? '' : value).toLowerCase();
+  s = s.replace(/(\d),(?=\d{3}\b)/g, '$1');
+  s = s.replace(/[\u2018\u2019\u201c\u201d]/g, '');
+  s = s.replace(/(\d)\.(?=\d)/g, '$1\u0000');        // protect decimals
+  s = s.replace(/(^|\s)-(?=\d)/g, '$1\u0001');         // protect a minus sign
+  s = s.replace(/[^\p{L}\p{N}\s\u0000\u0001\/]/gu, ' ');
+  s = s.replace(/\u0000/g, '.').replace(/\u0001/g, '-');
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+/** The accepted answers as a list: an array, or a string split on new lines, ";" or " or ". */
+export function answerList(answers) {
+  const raw = Array.isArray(answers) ? answers : [answers];
+  const out = [];
+  for (const a of raw) {
+    if (a == null) continue;
+    for (const part of String(a).split(/\n|;|\s+or\s+/i)) {
+      const t = part.trim();
+      if (t) out.push(t);
+    }
+  }
+  return out;
+}
+
+/** The first number in a normalised answer, or null. */
+function leadingNumber(norm) {
+  const m = String(norm).match(/-?\d+(?:\.\d+)?(?:\/\d+)?/);
+  if (!m) return null;
+  const t = m[0];
+  if (t.includes('/')) {
+    const [a, b] = t.split('/').map(Number);
+    return b ? a / b : null;
+  }
+  return Number(t);
+}
+
+const LETTER_TO_NUM = { a: '1', b: '2', c: '3', d: '4' };
+
+/** Which option an MCQ answer names: "2", "(2)", "B", "option 2", or the option text. '' if none. */
+function mcqChoice(value, options) {
+  const s = String(value == null ? '' : value).trim();
+  if (!s) return '';
+  const m = s.match(/^(?:option|ans(?:wer)?|choice)?\s*[:.]?\s*\(?\s*([1-8]|[a-d])\s*\)?\s*[.):]?(?:\s|$)/i);
+  if (m) {
+    const k = m[1].toLowerCase();
+    return LETTER_TO_NUM[k] || k;
+  }
+  const norm = normaliseAnswer(s);
+  const opts = (options || []).map((o, i) => {
+    const p = typeof o === 'string' ? parseLine(o, i) : o;
+    const label = String(p.label || i + 1).toLowerCase();
+    return { num: LETTER_TO_NUM[label] || label, text: normaliseAnswer(p.text) };
+  });
+  const hit = opts.find(o => o.text && o.text === norm);
+  return hit ? hit.num : '';
+}
+
+/**
+ * Is `given` right? type is 'mcq' or 'free'. answers: array or string (split
+ * on new lines, ";" or " or "). options: the MCQ options ("(1) 24" strings or
+ * {label, text}). Any listed answer counts.
+ */
+export function checkAnswer(type, given, answers, options) {
+  const accepted = answerList(answers);
+  if (!accepted.length) return false;
+  if (String(given == null ? '' : given).trim() === '') return false;
+  if (type === 'mcq') {
+    const pick = mcqChoice(given, options);
+    if (!pick) return false;
+    return accepted.some(a => mcqChoice(a, options) === pick);
+  }
+  const g = normaliseAnswer(given);
+  const gNum = leadingNumber(g);
+  return accepted.some(a => {
+    const n = normaliseAnswer(a);
+    if (n === g) return true;
+    const aNum = leadingNumber(n);
+    if (gNum != null && aNum != null) return Math.abs(gNum - aNum) < 1e-9;
+    return false;
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Diagram: crop the figure out of the screenshot and tidy it up
+// ─────────────────────────────────────────────────────────────────────────
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Could not load the picture.'));
+    img.src = src;
+  });
+}
+
+/** Crop a {box_2d:[ymin,xmin,ymax,xmax]} (0-1000) region plus 3% padding. */
+async function cropDiagram(imageDataUrl, diagram) {
+  const img = await loadImage(imageDataUrl);
+  const W = img.naturalWidth, H = img.naturalHeight;
+  const [ymin, xmin, ymax, xmax] = diagram.box_2d;
+  const pad = 30;
+  const x0 = Math.max(0, Math.floor((xmin - pad) / 1000 * W));
+  const y0 = Math.max(0, Math.floor((ymin - pad) / 1000 * H));
+  const x1 = Math.min(W, Math.ceil((xmax + pad) / 1000 * W));
+  const y1 = Math.min(H, Math.ceil((ymax + pad) / 1000 * H));
+  const w = x1 - x0, h = y1 - y0;
+  if (w < 8 || h < 8) throw new Error('The figure is too small to crop.');
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(img, x0, y0, w, h, 0, 0, w, h);
+  return c.toDataURL('image/png');
+}
+
+/**
+ * A quick clean-up with no AI: the 98th-percentile brightness is taken as the
+ * paper, anything within ~12% of it becomes pure white, and the rest is turned
+ * grey and contrast-stretched so the lines are dark and crisp.
+ */
+async function localCleanDiagram(dataUrl) {
+  const img = await loadImage(dataUrl);
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth; c.height = img.naturalHeight;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.drawImage(img, 0, 0);
+  const data = ctx.getImageData(0, 0, c.width, c.height);
+  const px = data.data;
+  const hist = new Uint32Array(256);
+  const n = px.length / 4;
+  for (let i = 0; i < px.length; i += 4) {
+    hist[Math.round(0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2])]++;
+  }
+  let lo = 0, white = 255, acc = 0;
+  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= n * 0.98) { white = v; break; } }
+  acc = 0;
+  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= n * 0.01) { lo = v; break; } }
+  white = Math.max(white, 40);
+  const snap = white * 0.88;
+  const span = Math.max(1, snap - lo);
+  for (let i = 0; i < px.length; i += 4) {
+    const y = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+    let out;
+    if (y >= snap) out = 255;
+    else out = Math.max(0, Math.min(255, Math.round((y - lo) / span * 235)));
+    px[i] = px[i + 1] = px[i + 2] = out;
+    px[i + 3] = 255;
+  }
+  ctx.putImageData(data, 0, 0);
+  return c.toDataURL('image/png');
+}
+
+/** Downscale to at most 1000px a side; PNG, or JPEG 0.85 when the PNG is over 300 KB. */
+async function finishDiagram(dataUrl) {
+  const img = await loadImage(dataUrl);
+  const scale = Math.min(1, 1000 / Math.max(img.naturalWidth, img.naturalHeight));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+  c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.drawImage(img, 0, 0, c.width, c.height);
+  let out = c.toDataURL('image/png');
+  if (out.length * 0.75 > 300 * 1024) out = c.toDataURL('image/jpeg', 0.85);
+  return out;
+}
+
+/** AI clean-up, falling back to the quick one. Returns {url, quick}. */
+async function cleanUpDiagram(cropUrl, signal) {
+  try {
+    const url = await enhanceDiagram({ imageDataUrl: cropUrl, signal });
+    return { url: await finishDiagram(url), quick: false };
+  } catch (err) {
+    if (err && err.cancelled) throw err;
+    return { url: await finishDiagram(await localCleanDiagram(cropUrl)), quick: true };
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -202,6 +433,7 @@ function questionView(data) {
   for (const para of String(stem).split(/\n{2,}/)) {
     if (para.trim()) wrap.appendChild(el('p', { class: 'board-stem' }, para.trim()));
   }
+  if (data.diagram) wrap.appendChild(el('img', { class: 'board-diagram', src: data.diagram, alt: 'Diagram' }));
   if (options.length) {
     const list = el('ol', { class: 'board-options' });
     for (const o of options) {
@@ -334,10 +566,21 @@ function createEditor(board, existing) {
     qWrap.appendChild(qLabel);
     result.appendChild(qWrap);
 
-    if (d.answers.length) {
-      result.appendChild(el('p', { class: 'board-answer-note' },
-        'Answer the AI found: ' + d.answers.join(' or ') + ' (kept hidden from your child)'));
-    }
+    const aLabel = el('label', { class: 'board-label' }, 'Correct answer(s)');
+    const aInput = el('input', { type: 'text', class: 'board-input board-answers-input', autocomplete: 'off',
+      placeholder: d.type === 'mcq' ? 'e.g. 2' : 'e.g. 245; 245 marbles' });
+    aInput.value = (d.answers || []).join('; ');
+    aInput.addEventListener('input', () => {
+      d.answers = aInput.value.split(';').map(a => a.trim()).filter(Boolean).slice(0, 10);
+    });
+    aLabel.appendChild(aInput);
+    result.appendChild(el('div', { class: 'board-edit-answers' }, [
+      aLabel,
+      el('p', { class: 'board-answer-note' },
+        'For MCQ type the option number. Separate several accepted answers with ; (kept hidden from your child until they check).'),
+    ]));
+
+    result.appendChild(diagramEditor(d));
 
     const appHost = el('div', { class: 'board-app' });
     result.appendChild(appHost);
@@ -372,6 +615,58 @@ function createEditor(board, existing) {
     result.appendChild(tweak);
     if (state.building) tweak.querySelectorAll('textarea, button').forEach(n => { n.disabled = true; });
     saveBtn.disabled = state.building;
+  }
+
+  function diagramEditor(d) {
+    const sec = el('div', { class: 'board-diagram-edit' });
+    sec.appendChild(el('p', { class: 'board-label' }, 'Diagram'));
+    if (d.diagram) {
+      sec.appendChild(el('img', { class: 'board-diagram', src: d.diagram, alt: 'Diagram' }));
+    } else {
+      sec.appendChild(el('p', { class: 'board-diagram-none' }, 'No diagram for this question.'));
+    }
+    const row = el('div', { class: 'board-diagram-row' });
+    const file = el('input', { type: 'file', accept: 'image/*', class: 'board-file' });
+    const replaceBtn = el('button', { type: 'button', class: 'board-btn' }, d.diagram ? 'Replace…' : 'Add a diagram…');
+    replaceBtn.addEventListener('click', () => file.click());
+    file.addEventListener('change', async () => {
+      const f = file.files && file.files[0];
+      file.value = '';
+      if (!f) return;
+      try {
+        d.diagram = await finishDiagram(await readImageFile(f));
+        showResult();
+      } catch (_) { setStatus('Could not read that picture.', 'error'); }
+    });
+    row.append(replaceBtn, file);
+    if (d.diagram) {
+      const removeBtn = el('button', { type: 'button', class: 'board-btn board-btn-quiet' }, 'Remove diagram');
+      removeBtn.addEventListener('click', () => { d.diagram = ''; showResult(); });
+      const againBtn = el('button', { type: 'button', class: 'board-btn' }, 'Clean up again');
+      againBtn.addEventListener('click', async () => {
+        if (state.building) return;
+        setBuilding(true);
+        setStatus('Cleaning up the diagram…', 'busy');
+        const controller = new AbortController();
+        state.controller = controller;
+        try {
+          const out = await cleanUpDiagram(d.diagram, controller.signal);
+          if (state.controller !== controller) return;
+          d.diagram = out.url;
+          setStatus(out.quick ? 'The AI clean-up was not available, so a quick clean-up was used.' : 'Diagram cleaned up.',
+            out.quick ? 'warn' : 'ok');
+          showResult();
+        } catch (err) {
+          if (state.controller !== controller) return;
+          setStatus(err && err.cancelled ? 'Stopped.' : 'Could not clean up the diagram.', err && err.cancelled ? '' : 'error');
+        } finally {
+          if (state.controller === controller) { state.controller = null; setBuilding(false); }
+        }
+      });
+      row.append(againBtn, removeBtn);
+    }
+    sec.appendChild(row);
+    return sec;
   }
 
   async function tweak_() {
@@ -495,15 +790,31 @@ function createEditor(board, existing) {
         answers,
         html: reply.html,
         model: state.model,
+        diagram: '',
       };
-      setStatus(type === 'mcq'
+      let diagramNote = '';
+      if (reply.diagram) {
+        try {
+          setStatus('Cleaning up the diagram…', 'busy');
+          const crop = await cropDiagram(state.image, reply.diagram);
+          const out = await cleanUpDiagram(crop, controller.signal);
+          if (state.controller !== controller) return;
+          state.draft.diagram = out.url;
+          if (out.quick) diagramNote = ' The diagram got a quick clean-up (the AI clean-up was not available).';
+        } catch (err) {
+          if (state.controller !== controller) return;
+          if (err && err.cancelled) throw err;
+          diagramNote = ' The diagram could not be cut out; you can add one in the Diagram section.';
+        }
+      }
+      setStatus((type === 'mcq'
         ? 'Done. It looks like a multiple-choice question. Check it, then Save.'
-        : 'Done. It looks like a free-response question. Check it, then Save.', 'ok');
+        : 'Done. It looks like a free-response question. Check it, then Save.') + diagramNote, 'ok');
       showResult();
     } catch (err) {
       if (state.controller !== controller) return;
       const msg = err && err.message ? err.message : 'Something went wrong.';
-      if (err && err.kind === 'cancelled') {
+      if (err && (err.kind === 'cancelled' || err.cancelled)) {
         setStatus('Stopped.');
       } else if (err && KEY_ERROR_CODES.has(err.code)) {
         setStatus(msg, 'error');
@@ -540,6 +851,7 @@ function createEditor(board, existing) {
     }
     if (d.type === 'mcq') d.options = d.options.length ? d.options : parseOptions(d.questionText).map(o => '(' + o.label + ') ' + o.text);
     else d.options = [];
+    d.updatedAt = Date.now();
     board.commit(cleanBlock(d), box);
   }
 
@@ -590,6 +902,83 @@ function createEditor(board, existing) {
 // A saved box: only the question and the app
 // ─────────────────────────────────────────────────────────────────────────
 
+/** The "check your answer" row on a saved box. */
+function answerCheck(block) {
+  const wrap = el('div', { class: 'board-check' });
+  const hasAnswers = answerList(block.answers).length > 0;
+  const feedback = el('div', { class: 'board-feedback', role: 'status', 'aria-live': 'polite', hidden: '' });
+  const submit = el('button', { type: 'button', class: 'board-btn board-btn-primary board-submit', disabled: '' }, 'Check my answer');
+  const retry = el('button', { type: 'button', class: 'board-btn board-retry', hidden: '' }, 'Try again');
+  let getGiven = () => '';
+  let lock = () => {};
+  let unlock = () => {};
+
+  if (block.type === 'mcq') {
+    const opts = (block.options && block.options.length ? block.options.map(parseLine) : parseOptions(block.questionText));
+    const group = el('div', { class: 'board-choices', role: 'group', 'aria-label': 'Choose an answer' });
+    let picked = '';
+    const btns = opts.map((o) => {
+      const b = el('button', { type: 'button', class: 'board-choice', 'aria-pressed': 'false' }, [
+        el('span', { class: 'board-option-label' }, '(' + o.label + ')'),
+        el('span', {}, o.text),
+      ]);
+      b.addEventListener('click', () => {
+        picked = o.label;
+        btns.forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+        if (hasAnswers) submit.disabled = false;
+      });
+      group.appendChild(b);
+      return b;
+    });
+    getGiven = () => picked;
+    lock = () => btns.forEach(b => { b.disabled = true; });
+    unlock = () => {
+      picked = '';
+      btns.forEach(b => { b.disabled = false; b.setAttribute('aria-pressed', 'false'); });
+      submit.disabled = true;
+    };
+    wrap.appendChild(group);
+  } else {
+    const input = el('input', { type: 'text', class: 'board-input board-free-input', autocomplete: 'off',
+      'aria-label': 'Your answer', placeholder: 'Type your answer' });
+    input.addEventListener('input', () => { submit.disabled = !hasAnswers || !input.value.trim(); });
+    input.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter' && !submit.disabled) { ev.preventDefault(); submit.click(); }
+    });
+    getGiven = () => input.value;
+    lock = () => { input.disabled = true; };
+    unlock = () => { input.disabled = false; input.value = ''; submit.disabled = true; input.focus(); };
+    wrap.appendChild(input);
+  }
+
+  const row = el('div', { class: 'board-submit-row' }, [submit, retry]);
+  wrap.append(row, feedback);
+  if (!hasAnswers) {
+    submit.disabled = true;
+    row.appendChild(el('span', { class: 'board-no-answer' }, 'No answer saved — add one in ✎ edit'));
+  }
+
+  submit.addEventListener('click', () => {
+    const given = getGiven();
+    if (!hasAnswers || !String(given).trim()) return;
+    const ok = checkAnswer(block.type, given, block.answers, block.options);
+    feedback.hidden = false;
+    feedback.className = 'board-feedback ' + (ok ? 'is-ok' : 'is-wrong');
+    feedback.textContent = ok ? '✓ Correct!' : '✗ Not quite — try again';
+    lock();
+    submit.hidden = true;
+    retry.hidden = false;
+  });
+  retry.addEventListener('click', () => {
+    feedback.hidden = true;
+    feedback.textContent = '';
+    submit.hidden = false;
+    retry.hidden = true;
+    unlock();
+  });
+  return wrap;
+}
+
 function createSavedBox(board, block, index) {
   const box = el('section', { class: 'board-box board-box-saved', 'data-id': block.id,
     'aria-label': 'Question ' + (index + 1) });
@@ -602,6 +991,7 @@ function createSavedBox(board, block, index) {
   box.appendChild(tools);
   box.appendChild(el('div', { class: 'board-num' }, String(index + 1)));
   box.appendChild(questionView(block));
+  box.appendChild(answerCheck(block));
   // The app starts hidden. It is only built the first time it is shown, so a long
   // board does not load every app at once; hiding it again keeps its state.
   const appId = uid('app');
@@ -666,7 +1056,18 @@ export function initBoard({ listEl, addBtn, emptyEl }) {
       blocks = next;
       render();
     },
+    getBlocks() { return blocks.slice(); },
+    replace(list) {
+      blocks = list.slice();
+      // Keep an open editor: re-render leaves it in place.
+      if (activeEditor && activeEditor.existing && !blocks.some(b => b.id === activeEditor.existing.id) &&
+          !(activeEditor.editor && activeEditor.editor.isBusy())) {
+        activeEditor = null;
+      }
+      render();
+    },
   };
+  activeBoard = board;
 
   function render() {
     // Keep a live editor (and its in-flight build) when re-rendering.
