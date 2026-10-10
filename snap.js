@@ -20,13 +20,16 @@
 import {
   el, uid, showToast, readStore, writeStore, readImageFile, shrinkImageDataUrl,
   STORE_KEYS, escapeHtml,
-} from './core.js?v=1.1.0';
-import { AI_STORE_KEY, aiReady, describeAiRoute, generateWebapp } from './ai.js?v=1.1.0';
-import { TOPICS } from './questions.js?v=1.1.0';
+} from './core.js?v=1.1.1';
+import { AI_STORE_KEY, aiReady, describeAiRoute, generateWebapp, saveAiConfig } from './ai.js?v=1.1.1';
+import { TOPICS } from './questions.js?v=1.1.1';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────────────
+
+// AI error codes where pasting an OpenAI key is the fix (see ai.js AiError).
+const KEY_ERROR_CODES = new Set(['proxy-unreachable', 'no-key', 'bad-key']);
 
 const SNAP_STORE_KEY = 'vis_snaps';
 const SNAP_PREFS_KEY = 'vis_snap_prefs';
@@ -618,17 +621,45 @@ export function initSnap(rootEl, opts) {
 
   // ── Error ───────────────────────────────────────────────────────────────
   const errorText = el('p', { class: 'snap-error-text' });
-  const errorRetry = button('Try again', { kind: 'primary', small: true, onClick: () => startBuild() });
+  const errorRetry = button('Try again', { kind: 'primary', small: true, onClick: () => startBuild(state.lastBuildArgs || undefined) });
+  const errorTips = el('ul', { class: 'snap-error-tips' }, [
+    el('li', { text: 'Crop the screenshot to just one question.' }),
+    el('li', { text: 'Make sure the numbers are sharp and not cut off.' }),
+    el('li', { text: 'If it keeps failing, check Parent Studio → AI settings.' }),
+  ]);
+  const errorKeyId = uid('snap-key');
+  const errorKeyInput = el('input', {
+    type: 'password', id: errorKeyId, autocomplete: 'off', spellcheck: 'false',
+    placeholder: 'sk-…', class: 'snap-error-key-input',
+  });
+  const errorKeySave = button('Save key and try again', { kind: 'primary', small: true, onClick: () => saveKeyAndRetry() });
+  errorKeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveKeyAndRetry(); } });
+  const errorKeyBox = el('div', { class: 'snap-error-key', hidden: true }, [
+    el('label', { for: errorKeyId, text: 'OpenAI key' }),
+    el('div', { class: 'snap-error-key-row' }, [errorKeyInput, errorKeySave]),
+    el('p', { class: 'help', text: 'The key is kept only in this browser.' }),
+  ]);
+  function saveKeyAndRetry() {
+    const apiKey = errorKeyInput.value.trim();
+    if (!apiKey) {
+      setStatus('Paste an OpenAI key first.', 'error');
+      errorKeyInput.focus();
+      return;
+    }
+    try { saveAiConfig({ apiKey }); } catch (err) {
+      setStatus('Could not save the key: ' + (err && err.message ? err.message : 'unknown error'), 'error');
+      return;
+    }
+    errorKeyInput.value = '';
+    startBuild(state.lastBuildArgs || undefined);
+  }
   const errorBox = el('section', { class: 'card snap-error', hidden: true, role: 'alert' }, [
     el('div', { class: 'snap-error-icon', 'aria-hidden': 'true', text: '😕' }),
     el('div', { class: 'snap-error-body' }, [
       el('strong', { text: 'The AI could not build this one.' }),
       errorText,
-      el('ul', { class: 'snap-error-tips' }, [
-        el('li', { text: 'Crop the screenshot to just one question.' }),
-        el('li', { text: 'Make sure the numbers are sharp and not cut off.' }),
-        el('li', { text: 'If it keeps failing, check Parent Studio → AI settings.' }),
-      ]),
+      errorTips,
+      errorKeyBox,
       el('div', { class: 'snap-error-actions' }, [errorRetry]),
     ]),
   ]);
@@ -1130,6 +1161,7 @@ export function initSnap(rootEl, opts) {
 
   async function startBuild(extra) {
     const x = extra || {};
+    state.lastBuildArgs = extra || null;
     const image = x.image || state.image;
     if (!image) {
       setStatus('Paste or choose a screenshot first.', 'error');
@@ -1203,6 +1235,10 @@ export function initSnap(rootEl, opts) {
       const message = err && err.message ? err.message : String(err || 'Something went wrong.');
       state.lastError = message;
       errorText.textContent = message;
+      const needsKey = Boolean(err && KEY_ERROR_CODES.has(err.code));
+      errorTips.hidden = needsKey;
+      errorKeyBox.hidden = !needsKey;
+      errorRetry.hidden = needsKey && err.code !== 'proxy-unreachable';
       errorBox.hidden = false;
       setStatus('The AI could not build it — see below.', 'error');
       errorBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });

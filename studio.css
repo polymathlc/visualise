@@ -221,3 +221,5 @@
 @media print {
   .studio-nav { display: none; }
 }
+.studio-ai-keybox[hidden] { display: none; }
+.studio-ai-keybox input[type="password"] { flex: 1 1 200px; min-width: 0; }
