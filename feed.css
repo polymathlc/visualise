@@ -1,0 +1,147 @@
+/* feed.css — extras for the endless question feed (feed.js).
+   Builds on styles.css: .card, .question-card, .visual-gate, .visual-panel,
+   .answer-row, .feedback, .hint-box, .solution-box, .chip, .stats-strip. */
+
+.stats-strip {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.feed-stat {
+  white-space: nowrap;
+}
+
+.feed-stat.is-hot b {
+  color: var(--warm-ink);
+}
+
+.feed-stats-reset {
+  margin-left: auto;
+}
+
+/* Gate: once the picture is open the dashed box becomes a slim bar. */
+.visual-gate.is-open {
+  padding: var(--space-sm) var(--space-md);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  text-align: left;
+  margin-bottom: var(--space-md);
+}
+
+.visual-gate.is-open p {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.question-card.is-locked .answer-row {
+  opacity: 0.7;
+}
+
+.question-card.is-unlocked .locked-note {
+  color: var(--ok);
+}
+
+.question-card.is-revealed {
+  border-color: var(--warm);
+}
+
+.feed-picture-status:empty {
+  display: none;
+}
+
+.feed-answer-form {
+  margin: 0;
+}
+
+.feed-card-extras:empty {
+  display: none;
+}
+
+.feed-nudge p,
+.feed-solution-tip {
+  margin: 0 0 var(--space-sm);
+}
+
+.feed-solution-tip {
+  margin-top: var(--space-sm);
+  color: var(--text-soft);
+}
+
+.feed-also {
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  margin-top: var(--space-xs);
+}
+
+/* Scratch pad for questions without a picture. */
+.feed-scratch-canvas {
+  display: block;
+  width: 100%;
+  height: 200px;
+  background:
+    linear-gradient(var(--border) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(90deg, var(--border) 1px, transparent 1px) 0 0 / 24px 24px,
+    var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.feed-scratch-canvas:focus-visible {
+  outline: 3px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
+.feed-scratch-tools {
+  margin-top: var(--space-sm);
+}
+
+.feed-trimmed {
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.feed-empty {
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .answer-row .btn {
+    flex: 1 1 100%;
+    min-height: 48px;
+  }
+
+  .visual-gate .btn {
+    width: 100%;
+  }
+
+  .visual-gate.is-open .btn {
+    width: auto;
+  }
+
+  .card-foot .btn {
+    flex: 1 1 auto;
+  }
+
+  .feed-stats-reset {
+    margin-left: 0;
+  }
+}
+
+@media print {
+  .visual-gate,
+  .visual-panel,
+  .feed-card-extras,
+  .card-foot,
+  .locked-note,
+  .feed-trimmed,
+  .feed-stats-reset {
+    display: none !important;
+  }
+}
