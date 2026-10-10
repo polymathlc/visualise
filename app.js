@@ -1,11 +1,14 @@
 // Picture It · P3 Maths — entry point.
-// Wires the two tabs (question feed and Parent Studio), the version badge and
+// Wires the three tabs (question feed, Snap & Play and Parent Studio), the version badge and
 // printing. Each section lives in its own module; this file only connects them.
 
-import { APP_VERSION, showToast } from './core.js';
-import { initFeed, refreshFeed } from './feed.js';
-import { initStudio } from './studio.js';
-import { initSnap } from './snap.js';
+// Every local import carries ?v=<version>. Bump it on each release so browsers
+// never mix a new index.html with old cached modules (a stale app.js without
+// the Snap & Play wiring made that tab do nothing).
+import { APP_VERSION, showToast } from './core.js?v=1.1.0';
+import { initFeed, refreshFeed } from './feed.js?v=1.1.0';
+import { initStudio } from './studio.js?v=1.1.0';
+import { initSnap } from './snap.js?v=1.1.0';
 
 const TABS = [
   { tab: 'tabFeed', view: 'feedView', hash: '#questions' },
@@ -47,11 +50,16 @@ function selectTab(tabId, options) {
   }
   if (tabId === 'tabSnap' && !snapReady) {
     snapReady = true;
-    initSnap(byId('snap'), {
-      onChange() {
-        feedDirty = true;
-      },
-    });
+    try {
+      initSnap(byId('snap'), {
+        onChange() {
+          feedDirty = true;
+        },
+      });
+    } catch (error) {
+      console.error('Snap & Play failed to start', error);
+      showToast('Snap & Play could not start. Please refresh the page.', 'error');
+    }
   }
   if (tabId === 'tabFeed' && feedDirty) {
     feedDirty = false;
