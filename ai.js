@@ -10,7 +10,7 @@
 // SYSTEM_PROMPT and the reply cleaning below duplicate functions/prompt.js.
 // Keep them in step when editing either copy.
 
-import { readStore, writeStore, shrinkImageDataUrl } from './core.js?v=1.2.1';
+import { readStore, writeStore, shrinkImageDataUrl } from './core.js?v=1.2.2';
 
 export const AI_STORE_KEY = 'vis_ai';
 export const DEFAULT_PROXY_URL = 'https://us-central1-mathgen--app.cloudfunctions.net/visualiseAi';
@@ -338,6 +338,78 @@ export function buildWebappChatBody({ imageDataUrl, note, model }) {
   };
 }
 
+// Models the browser may ask for. Anything else falls back to the default, so
+// a caller can never name an expensive model on the centre's bill.
+// ---------------------------------------------------------------------------
+export const MODEL_ALLOWLIST = ['gpt-6-luna', 'gpt-6.1-sol'];
+/** The models a parent can pick per question (the server allows exactly these). */
+export const MODEL_CHOICES = Object.freeze([
+  Object.freeze({ id: 'gpt-6-luna', label: 'ChatGPT 6 Luna (fast)' }),
+  Object.freeze({ id: 'gpt-6.1-sol', label: 'ChatGPT Sol 6.1 (harder questions, slower)' }),
+]);
+
+/** The model to use: the caller's pick when it is on the allowlist, else the fallback. */
+export function pickModel(requested, fallback) {
+  const want = String(requested || '').trim();
+  return MODEL_ALLOWLIST.includes(want) ? want : (fallback || DEFAULT_MODEL);
+}
+
+// ---------------------------------------------------------------------------
+// TWEAK mode: the parent types an instruction and the existing app is rewritten.
+// No screenshot is needed: the current app HTML is the whole brief.
+// ---------------------------------------------------------------------------
+export const TWEAK_MAX_INSTRUCTION_CHARS = 2000;
+
+export const TWEAK_SYSTEM_PROMPT = `You are a senior front-end engineer and an expert Singapore Primary 3 (P3) mathematics teacher.
+You are given a complete single-file HTML web app that helps a P3 child understand ONE maths question, plus an
+instruction from the child's parent saying how to change it.
+
+Apply the parent's instruction to the app. Rules:
+- Change only what the instruction asks for; keep everything else (the question, the maths, the layout, the
+  working buttons) exactly as it was unless the instruction says otherwise.
+- The maths must stay correct. If the instruction would make the maths wrong, keep the maths right and make the
+  closest sensible change instead.
+- The result must still be ONE self-contained HTML document: inline <style> and <script> only, no external
+  scripts, stylesheets, fonts or network requests, no localStorage, no alert/prompt/confirm.
+- Keep it friendly for a 9-year-old: large tap targets, plain words, works on a phone and a laptop.
+- Never reveal the final answer before the child has tried, unless the parent explicitly asks for that.
+
+Return ONLY a JSON object with exactly these keys:
+{
+  "title": "short friendly title for the app, max 60 chars",
+  "questionText": "the question, as before (update only if the instruction changes it)",
+  "answers": ["every accepted final answer string"],
+  "hint": "one sentence for a parent: what the model looks like, without the answer",
+  "html": "the complete updated HTML document as one string"
+}`;
+
+/** User-turn text for tweak mode. */
+export function buildTweakUserText({ html, instruction, questionText, answers }) {
+  const clean = String(instruction || '').trim().slice(0, TWEAK_MAX_INSTRUCTION_CHARS);
+  const lines = [
+    'The parent\'s instruction:',
+    clean,
+    '',
+  ];
+  if (questionText) lines.push('The question the app is about: ' + String(questionText).slice(0, 4000), '');
+  if (Array.isArray(answers) && answers.length) lines.push('Accepted answers so far: ' + answers.slice(0, 12).map(String).join(', '), '');
+  lines.push('The current app HTML:', String(html || ''));
+  return lines.join('\n');
+}
+
+/** OpenAI chat/completions body for tweak mode. */
+export function buildTweakChatBody({ html, instruction, questionText, answers, model }) {
+  return {
+    model: model || DEFAULT_MODEL,
+    response_format: { type: 'json_object' },
+    max_completion_tokens: 48000,
+    messages: [
+      { role: 'system', content: TWEAK_SYSTEM_PROMPT },
+      { role: 'user', content: buildTweakUserText({ html, instruction, questionText, answers }) },
+    ],
+  };
+}
+
 /** Make sure an HTML string is a full document with charset and viewport. */
 export function ensureFullDocument(html, title) {
   let doc = String(html || '').trim();
@@ -517,7 +589,7 @@ async function callOpenAiDirect(apiKey, model, payload, spec, signal) {
   const response = await fetchWithTimeout(OPENAI_URL, {
     method: 'POST',
     headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify(s.buildBody({ imageDataUrl: payload.imageDataUrl, note: payload.note, model })),
+    body: JSON.stringify(s.buildBody(Object.assign({}, payload, { model }))),
   }, s.timeoutMs, 'OpenAI', signal, 'network');
 
   const { data, text } = await readJson(response);
@@ -575,9 +647,32 @@ export async function generateVisualiser({ imageDataUrl, note } = {}) {
  * one complete self-contained HTML document. `onStatus(text)` hears progress;
  * `signal` (an AbortSignal) cancels. A cancel rejects with err.cancelled = true.
  */
-export async function generateWebapp({ imageDataUrl, note, onStatus, signal } = {}) {
-  return runWithRoutes({ imageDataUrl, note }, WEBAPP_SPEC, { onStatus, signal });
+export async function generateWebapp({ imageDataUrl, note, model, onStatus, signal } = {}) {
+  return runWithRoutes({ imageDataUrl, note, model }, WEBAPP_SPEC, { onStatus, signal });
 }
+
+/**
+ * Tweak an existing app from a typed instruction ("make the bars bigger").
+ * Resolves the same shape as generateWebapp. No screenshot is needed.
+ */
+export async function tweakWebapp({ html, instruction, questionText, answers, model, onStatus, signal } = {}) {
+  const ins = String(instruction || '').trim().slice(0, TWEAK_MAX_INSTRUCTION_CHARS);
+  if (!ins) throw new Error('Type what you want changed first.');
+  if (typeof html !== 'string' || !html.trim()) throw new Error('There is no app to change yet.');
+  if (html.length > WEBAPP_MAX_HTML_CHARS) throw new Error('This app is too large to change.');
+  return runWithRoutes({
+    model, html, instruction: ins,
+    questionText: String(questionText || '').slice(0, 4000),
+    answers: Array.isArray(answers) ? answers.slice(0, 12).map((a) => String(a).slice(0, 80)) : [],
+  }, TWEAK_SPEC, { onStatus, signal, noImage: true });
+}
+
+const TWEAK_SPEC = Object.freeze({
+  buildBody: (args) => buildTweakChatBody(args),
+  clean: (raw) => cleanWebappReply(raw),
+  timeoutMs: WEBAPP_TIMEOUT_MS,
+  proxyExtra: { mode: 'tweak' },
+});
 
 const WEBAPP_SPEC = Object.freeze({
   buildBody: (args) => buildWebappChatBody(args),
@@ -589,13 +684,14 @@ const WEBAPP_SPEC = Object.freeze({
 const SERVICE_OFF_MESSAGE = 'The AI service isn\'t switched on yet. Paste an OpenAI key to use it now, or try again later.';
 
 /** Proxy first, then (when allowed) this browser's own key. */
-async function runWithRoutes({ imageDataUrl, note }, spec, opts) {
+async function runWithRoutes(input, spec, opts) {
+  const { imageDataUrl, note } = input || {};
   const o = opts || {};
   const status = (text) => {
     if (typeof o.onStatus !== 'function') return;
     try { o.onStatus(text); } catch (_) { /* a broken listener must not break the call */ }
   };
-  if (typeof imageDataUrl !== 'string' || !/^data:image\/[a-z0-9.+-]+;base64,/i.test(imageDataUrl)) {
+  if (!o.noImage && (typeof imageDataUrl !== 'string' || !/^data:image\/[a-z0-9.+-]+;base64,/i.test(imageDataUrl))) {
     throw new Error('Add a screenshot of the question first.');
   }
   const cfg = getAiConfig();
@@ -603,14 +699,22 @@ async function runWithRoutes({ imageDataUrl, note }, spec, opts) {
     throw new AiError(SERVICE_OFF_MESSAGE, { kind: 'input', code: 'no-key' });
   }
 
-  status('Getting the screenshot ready…');
-  let image = imageDataUrl;
-  try { image = await shrinkImageDataUrl(imageDataUrl, 1600); } catch (_) { /* keep original */ }
-  if (image.length > MAX_IMAGE_CHARS) {
-    throw new Error('The screenshot is too large. Crop it to just the question and try again.');
+  // A chosen model is only ever one the server also allows.
+  const model = MODEL_ALLOWLIST.includes(String(input.model || '')) ? String(input.model) : '';
+  let payload;
+  if (o.noImage) {
+    payload = { html: input.html, instruction: input.instruction, questionText: input.questionText, answers: input.answers };
+  } else {
+    status('Getting the screenshot ready…');
+    let image = imageDataUrl;
+    try { image = await shrinkImageDataUrl(imageDataUrl, 1600); } catch (_) { /* keep original */ }
+    if (image.length > MAX_IMAGE_CHARS) {
+      throw new Error('The screenshot is too large. Crop it to just the question and try again.');
+    }
+    payload = { imageDataUrl: image, note: String(note || '').slice(0, MAX_NOTE_CHARS) };
   }
+  if (model) payload.model = model;
   if (o.signal && o.signal.aborted) throw cancelledError();
-  const payload = { imageDataUrl: image, note: String(note || '').slice(0, MAX_NOTE_CHARS) };
 
   let proxyError = null;
   if (cfg.proxyUrl) {
@@ -635,7 +739,7 @@ async function runWithRoutes({ imageDataUrl, note }, spec, opts) {
   }
 
   try {
-    return await callOpenAiDirect(cfg.apiKey, cfg.model, payload, spec, o.signal);
+    return await callOpenAiDirect(cfg.apiKey, model || cfg.model, payload, spec, o.signal);
   } catch (err) {
     if (err instanceof AiError && err.kind === 'cancelled') throw cancelledError();
     if (proxyError) {

@@ -10,12 +10,20 @@
 // box holds runs in <iframe sandbox="allow-scripts"> with srcdoc: an opaque
 // origin, so a generated app can never read this site's storage or DOM.
 
-import { readStore, writeStore, uid, escapeHtml, el, showToast, readImageFile } from './core.js?v=1.2.1';
-import { generateWebapp, saveAiConfig, getAiConfig } from './ai.js?v=1.2.1';
+import { readStore, writeStore, uid, escapeHtml, el, showToast, readImageFile } from './core.js?v=1.2.2';
+import { generateWebapp, tweakWebapp, saveAiConfig, getAiConfig, MODEL_CHOICES } from './ai.js?v=1.2.2';
 
 const BLOCKS_KEY = 'vis_blocks';
 const MAX_BLOCKS = 200;
 const KEY_ERROR_CODES = new Set(['no-key', 'proxy-unreachable', 'bad-key']);
+// Luna is quick and cheap; Sol 6.1 thinks harder for tricky questions.
+const DEFAULT_MODEL = 'gpt-6-luna';
+const MODEL_IDS = new Set(MODEL_CHOICES.map(m => m.id));
+function cleanModel(m) { return MODEL_IDS.has(m) ? m : DEFAULT_MODEL; }
+function modelLabel(m) {
+  const c = MODEL_CHOICES.find(x => x.id === m);
+  return c ? c.label : m;
+}
 const FRAME_MIN = 220;
 const FRAME_MAX = 1600;
 const FRAME_START = 460;
@@ -35,6 +43,8 @@ function cleanBlock(b) {
     answers: Array.isArray(b.answers) ? b.answers.map(String).slice(0, 10) : [],
     title: String(b.title || ''),
     html: b.html,
+    model: cleanModel(b.model),
+    tweaks: Array.isArray(b.tweaks) ? b.tweaks.map((t) => String(t).slice(0, 400)).slice(-10) : [],
     createdAt: Number(b.createdAt) || Date.now(),
   };
 }
@@ -220,6 +230,7 @@ function createEditor(board, existing) {
     image: null,
     controller: null,
     building: false,
+    model: cleanModel(existing && existing.model),
   };
 
   const box = el('section', { class: 'board-box board-box-editing', 'aria-label': 'New question' });
@@ -248,7 +259,25 @@ function createEditor(board, existing) {
   const cancelBtn = el('button', { type: 'button', class: 'board-btn board-btn-quiet' }, 'Cancel');
   actions.append(saveBtn, rebuildBtn, stopBtn, cancelBtn);
 
-  box.append(head, drop, preview, status, keyBox, result, actions);
+  // Which AI builds (and tweaks) this question's app.
+  const modelRow = el('div', { class: 'board-model-row' });
+  const modelLabelEl = el('label', { class: 'board-label board-model-label' }, 'Which AI');
+  const modelSelect = el('select', { class: 'board-select', 'aria-label': 'Which AI builds the app' });
+  MODEL_CHOICES.forEach(m => {
+    const opt = el('option', { value: m.id }, m.label);
+    if (m.id === state.model) opt.selected = true;
+    modelSelect.appendChild(opt);
+  });
+  modelLabelEl.appendChild(modelSelect);
+  modelRow.appendChild(modelLabelEl);
+  modelRow.appendChild(el('p', { class: 'board-model-note' },
+    'Pick Sol 6.1 for a harder question. It takes longer but thinks more carefully.'));
+  modelSelect.addEventListener('change', () => {
+    state.model = cleanModel(modelSelect.value);
+    if (state.draft) state.draft.model = state.model;
+  });
+
+  box.append(head, modelRow, drop, preview, status, keyBox, result, actions);
 
   function setStatus(text, kind) {
     status.textContent = text || '';
@@ -262,6 +291,8 @@ function createEditor(board, existing) {
     rebuildBtn.hidden = on || !state.image;
     saveBtn.disabled = on || !state.draft;
     drop.classList.toggle('is-disabled', on);
+    modelSelect.disabled = on;
+    box.querySelectorAll('.board-tweak textarea, .board-tweak button').forEach(n => { n.disabled = on; });
   }
 
   function showPreview(dataUrl) {
@@ -312,12 +343,89 @@ function createEditor(board, existing) {
     result.appendChild(appHost);
     const frame = mountApp(appHost, d.html, d.title);
     frame.addEventListener('apperror', ev => {
-      setStatus('The app hit a problem (' + ev.detail + '). Try "Build again" if it does not work.', 'warn');
+      setStatus('The app hit a problem (' + ev.detail + '). Try "Build again" or tweak it below.', 'warn');
     });
-    saveBtn.disabled = false;
+
+    // Tweak: type a change and the AI rewrites this app.
+    const tweak = el('div', { class: 'board-tweak' });
+    const tLabel = el('label', { class: 'board-label' }, 'Tweak the app: type what you want changed');
+    const tArea = el('textarea', { class: 'board-textarea', rows: '3',
+      placeholder: 'e.g. Make the buttons bigger. Use apples instead of blocks. Add a hint button. Show the bar model step by step.' });
+    tArea.value = state.tweakText || '';
+    tArea.addEventListener('input', () => { state.tweakText = tArea.value; });
+    tArea.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); tweak_(); }
+    });
+    tLabel.appendChild(tArea);
+    const tRow = el('div', { class: 'board-tweak-row' });
+    const tBtn = el('button', { type: 'button', class: 'board-btn board-btn-primary' }, '✨ Tweak the app');
+    tBtn.addEventListener('click', () => tweak_());
+    tRow.appendChild(tBtn);
+    tRow.appendChild(el('span', { class: 'board-tweak-note' }, 'Uses ' + modelLabel(state.model) + '. Ctrl+Enter also works.'));
+    tweak.append(tLabel, tRow);
+    if (d.tweaks && d.tweaks.length) {
+      const hist = el('ul', { class: 'board-tweak-history' });
+      d.tweaks.slice(-5).forEach(t => hist.appendChild(el('li', {}, t)));
+      tweak.appendChild(el('p', { class: 'board-tweak-history-title' }, 'Changes made so far:'));
+      tweak.appendChild(hist);
+    }
+    result.appendChild(tweak);
+    if (state.building) tweak.querySelectorAll('textarea, button').forEach(n => { n.disabled = true; });
+    saveBtn.disabled = state.building;
   }
 
-  function showKeyBox(message) {
+  async function tweak_() {
+    const d = state.draft;
+    if (!d || state.building) return;
+    const instruction = String(state.tweakText || '').trim();
+    if (!instruction) { setStatus('Type what you want changed first.', 'error'); return; }
+    keyBox.hidden = true;
+    setBuilding(true);
+    setStatus('Changing the app…', 'busy');
+    const controller = new AbortController();
+    state.controller = controller;
+    try {
+      const reply = await tweakWebapp({
+        html: d.html,
+        instruction,
+        questionText: d.questionText,
+        answers: d.answers,
+        model: state.model,
+        onStatus: text => { if (state.controller === controller) setStatus(text, 'busy'); },
+        signal: controller.signal,
+      });
+      if (state.controller !== controller) return;
+      d.html = reply.html;
+      if (reply.title) d.title = String(reply.title);
+      const answers = Array.isArray(reply.answers) ? reply.answers.map(String).filter(Boolean) : [];
+      if (answers.length) d.answers = answers;
+      d.model = state.model;
+      d.tweaks = (d.tweaks || []).concat([instruction]).slice(-10);
+      state.tweakText = '';
+      setStatus('Done. The app has been changed. Check it, then Save.', 'ok');
+      showResult();
+    } catch (err) {
+      if (state.controller !== controller) return;
+      const msg = err && err.message ? err.message : 'Something went wrong.';
+      if (err && err.kind === 'cancelled') {
+        setStatus('Stopped. The app was not changed.');
+      } else if (err && KEY_ERROR_CODES.has(err.code)) {
+        setStatus(msg, 'error');
+        showKeyBox(getAiConfig().apiKey
+          ? 'The AI did not accept the saved key. Paste a working OpenAI key:'
+          : 'The AI server is not answering right now. You can paste your own OpenAI key:', tweak_);
+      } else {
+        setStatus(msg, 'error');
+      }
+    } finally {
+      if (state.controller === controller) {
+        state.controller = null;
+        setBuilding(false);
+      }
+    }
+  }
+
+  function showKeyBox(message, retry) {
     keyBox.innerHTML = '';
     keyBox.hidden = false;
     keyBox.appendChild(el('p', {}, message));
@@ -333,7 +441,7 @@ function createEditor(board, existing) {
       }
       saveAiConfig({ apiKey: key });
       keyBox.hidden = true;
-      build();
+      (retry || build)();
     });
     row.append(input, go);
     keyBox.appendChild(row);
@@ -368,6 +476,7 @@ function createEditor(board, existing) {
     try {
       const reply = await generateWebapp({
         imageDataUrl: state.image,
+        model: state.model,
         note: 'Build an app for a Primary 3 child. Show the question at the top of the app.',
         onStatus: text => { if (state.controller === controller) setStatus(text, 'busy'); },
         signal: controller.signal,
@@ -385,6 +494,7 @@ function createEditor(board, existing) {
         options: type === 'mcq' ? parseOptions(questionText).map(o => '(' + o.label + ') ' + o.text) : [],
         answers,
         html: reply.html,
+        model: state.model,
       };
       setStatus(type === 'mcq'
         ? 'Done. It looks like a multiple-choice question. Check it, then Save.'

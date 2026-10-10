@@ -5,8 +5,8 @@
 
 // Every local import carries ?v=<version>. Bump it on each release so browsers
 // never mix a new index.html with old cached modules.
-import { APP_VERSION, showToast } from './core.js?v=1.2.1';
-import { initBoard } from './board.js?v=1.2.1';
+import { APP_VERSION, showToast } from './core.js?v=1.2.2';
+import { initBoard } from './board.js?v=1.2.2';
 
 function start() {
   const badge = document.getElementById('versionBadge');
