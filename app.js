@@ -5,10 +5,10 @@
 // Every local import carries ?v=<version>. Bump it on each release so browsers
 // never mix a new index.html with old cached modules (a stale app.js without
 // the Snap & Play wiring made that tab do nothing).
-import { APP_VERSION, showToast } from './core.js?v=1.1.0';
-import { initFeed, refreshFeed } from './feed.js?v=1.1.0';
-import { initStudio } from './studio.js?v=1.1.0';
-import { initSnap } from './snap.js?v=1.1.0';
+import { APP_VERSION, showToast } from './core.js?v=1.1.1';
+import { initFeed, refreshFeed } from './feed.js?v=1.1.1';
+import { initStudio } from './studio.js?v=1.1.1';
+import { initSnap } from './snap.js?v=1.1.1';
 
 const TABS = [
   { tab: 'tabFeed', view: 'feedView', hash: '#questions' },

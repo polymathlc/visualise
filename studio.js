@@ -29,10 +29,10 @@ import {
   mountSandbox,
   readImageFile,
   shrinkImageDataUrl,
-} from './core.js?v=1.1.0';
-import { VISUALISERS, renderVisual } from './visualisers.js?v=1.1.0';
-import { TOPICS, loadParentQuestions, saveParentQuestions } from './questions.js?v=1.1.0';
-import { getAiConfig, saveAiConfig, aiReady, generateVisualiser } from './ai.js?v=1.1.0';
+} from './core.js?v=1.1.1';
+import { VISUALISERS, renderVisual } from './visualisers.js?v=1.1.1';
+import { TOPICS, loadParentQuestions, saveParentQuestions } from './questions.js?v=1.1.1';
+import { getAiConfig, saveAiConfig, aiReady, generateVisualiser } from './ai.js?v=1.1.1';
 
 const AI_MODEL_LABEL = 'gpt-6-luna';
 const QUESTION_IMAGE_MAX_SIDE = 1200;
@@ -1350,12 +1350,40 @@ export function initStudio(rootEl, opts) {
     const cancelRunBtn = button('Cancel', 'btn btn-quiet', () => cancelRun());
     cancelRunBtn.hidden = true;
     const runStatus = el('div', { class: 'status-line', 'aria-live': 'polite' });
+    // Inline key box, shown when the AI service is off or the key is missing/wrong.
+    const runKeyInput = el('input', { type: 'password', autocomplete: 'off', spellcheck: 'false', placeholder: 'sk-…' });
+    const runKeySave = button('Save key and try again', 'btn btn-primary', () => saveRunKeyAndRetry());
+    runKeyInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.preventDefault(); saveRunKeyAndRetry(); }
+    });
+    runKeyInput.id = uid('runkey');
+    const runKeyBox = el('div', { class: 'field full studio-ai-keybox' }, [
+      el('label', { for: runKeyInput.id, text: 'OpenAI key' }),
+      el('div', { class: 'button-row' }, [runKeyInput, runKeySave]),
+      el('span', { class: 'help', text: 'The key is kept only in this browser.' }),
+    ]);
+    runKeyBox.hidden = true;
+
+    function saveRunKeyAndRetry() {
+      const apiKey = runKeyInput.value.trim();
+      if (!apiKey) {
+        setStatus(runStatus, 'Paste an OpenAI key first.', 'error');
+        runKeyInput.focus();
+        return;
+      }
+      if (!applyConfig({ apiKey })) return;
+      runKeyInput.value = '';
+      fillConfigInputs();
+      runKeyBox.hidden = true;
+      generate();
+    }
 
     card.appendChild(settingsPanel);
     card.appendChild(el('div', { class: 'form-grid studio-ai-input' }, [
       el('div', { class: 'field full' }, [el('label', { text: 'Screenshot' }), picker.element]),
       field('Note for the AI (optional)', noteInput, { full: true }),
       el('div', { class: 'full button-row' }, [generateBtn, cancelRunBtn, runStatus]),
+      runKeyBox,
     ]));
     // Make the whole card a paste target for the AI picker.
     card.addEventListener('pointerenter', () => { pickerRegistry.active = picker; });
@@ -1514,6 +1542,7 @@ export function initStudio(rootEl, opts) {
       if (state.result && !result.hidden && !window.confirm('Replace the current result with a new one?')) return;
 
       const run = ++state.run;
+      runKeyBox.hidden = true;
       state.sourceImage = image;
       state.sourceNote = noteInput.value.trim();
       state.startedAt = Date.now();
@@ -1540,6 +1569,10 @@ export function initStudio(rootEl, opts) {
         if (run !== state.run) return;
         const message = error && error.message ? error.message : String(error || 'unknown error');
         setStatus(runStatus, 'The AI could not do it: ' + message, 'error');
+        if (error && ['proxy-unreachable', 'no-key', 'bad-key'].includes(error.code)) {
+          runKeyBox.hidden = false;
+          runKeyInput.focus();
+        }
         showToast('AI error: ' + truncate(message, 140), 'error');
       } finally {
         if (run === state.run) {

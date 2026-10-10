@@ -10,7 +10,7 @@
 // SYSTEM_PROMPT and the reply cleaning below duplicate functions/prompt.js.
 // Keep them in step when editing either copy.
 
-import { readStore, writeStore, shrinkImageDataUrl } from './core.js?v=1.1.0';
+import { readStore, writeStore, shrinkImageDataUrl } from './core.js?v=1.1.1';
 
 export const AI_STORE_KEY = 'vis_ai';
 export const DEFAULT_PROXY_URL = 'https://us-central1-mathgen--app.cloudfunctions.net/visualiseAi';
@@ -407,17 +407,30 @@ export function cleanWebappReply(raw) {
 // ─────────────────────────────────────────────────────────────────────────
 
 class AiError extends Error {
-  constructor(message, { status = 0, kind = 'error', fallback = false } = {}) {
+  constructor(message, { status = 0, kind = 'error', fallback = false, code = '' } = {}) {
     super(message);
     this.name = 'AiError';
     this.status = status;
+    // Machine-readable: 'proxy-unreachable' | 'no-key' | 'bad-key' | 'rate-limited'
+    // | 'timeout' | 'network' | 'input' | 'format' | 'http' | 'cancelled'
+    this.code = code || kind;
     this.kind = kind;          // 'network' | 'timeout' | 'http' | 'format' | 'input'
     this.fallback = fallback;  // true: worth trying the other route
   }
 }
 
 /** fetch with a hard timeout; maps abort/network failures to AiError. */
-async function fetchWithTimeout(url, init, timeoutMs, label, outerSignal) {
+/** Upper-case the first letter, so a mid-sentence label can also start one. */
+function capitalise(text) {
+  const t = String(text || '');
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+/**
+ * `label` is written as it reads mid-sentence (e.g. 'the AI server');
+ * `unreachableCode` is the error code used when the host cannot be reached.
+ */
+async function fetchWithTimeout(url, init, timeoutMs, label, outerSignal, unreachableCode) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let cancelledByCaller = false;
@@ -433,11 +446,12 @@ async function fetchWithTimeout(url, init, timeoutMs, label, outerSignal) {
       throw new AiError('Cancelled.', { kind: 'cancelled' });
     }
     if (err && err.name === 'AbortError') {
-      throw new AiError(label + ' took longer than ' + Math.round(timeoutMs / 1000) +
-        ' seconds. Try again, or crop the screenshot to just the question.', { kind: 'timeout' });
+      throw new AiError(capitalise(label) + ' took longer than ' + Math.round(timeoutMs / 1000) +
+        ' seconds. Try again, or crop the screenshot to just the question.', { kind: 'timeout', code: 'timeout' });
     }
     // TypeError here covers offline, DNS failure and CORS rejection alike.
-    throw new AiError('Could not reach ' + label + ' (offline or blocked).', { kind: 'network', fallback: true });
+    throw new AiError('Could not reach ' + label + ' (offline or blocked).',
+      { kind: 'network', fallback: true, code: unreachableCode || 'network' });
   } finally {
     clearTimeout(timer);
     if (outerSignal) outerSignal.removeEventListener('abort', onOuterAbort);
@@ -465,7 +479,7 @@ async function callProxy(proxyUrl, payload, spec, signal) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  }, s.timeoutMs, 'The AI server', signal);
+  }, s.timeoutMs, 'the AI server', signal, 'proxy-unreachable');
 
   const { data } = await readJson(response);
   if (!response.ok || !data || data.ok === false) {
@@ -475,13 +489,13 @@ async function callProxy(proxyUrl, payload, spec, signal) {
       throw new AiError(serverMsg || 'The AI server could not use this screenshot.', { status, kind: 'input' });
     }
     if (status === 429) {
-      throw new AiError(serverMsg || 'The AI server is busy (429). Please wait a minute and try again.', { status, kind: 'http', fallback: true });
+      throw new AiError(serverMsg || 'The AI server is busy (429). Please wait a minute and try again.', { status, kind: 'http', fallback: true, code: 'rate-limited' });
     }
     if (status === 504) {
-      throw new AiError(serverMsg || 'The AI took too long to answer. Please try again.', { status, kind: 'timeout' });
+      throw new AiError(serverMsg || 'The AI took too long to answer. Please try again.', { status, kind: 'timeout', code: 'timeout' });
     }
     if (status === 404 || status === 405) {
-      throw new AiError('The AI server is not deployed at this address (' + status + ').', { status, kind: 'http', fallback: true });
+      throw new AiError('The AI server is not deployed at this address (' + status + ').', { status, kind: 'http', fallback: true, code: 'proxy-unreachable' });
     }
     if (status === 403) {
       throw new AiError(serverMsg || 'The AI server does not accept requests from this site (403).', { status, kind: 'http', fallback: true });
@@ -504,17 +518,17 @@ async function callOpenAiDirect(apiKey, model, payload, spec, signal) {
     method: 'POST',
     headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
     body: JSON.stringify(s.buildBody({ imageDataUrl: payload.imageDataUrl, note: payload.note, model })),
-  }, s.timeoutMs, 'OpenAI', signal);
+  }, s.timeoutMs, 'OpenAI', signal, 'network');
 
   const { data, text } = await readJson(response);
   if (!response.ok) {
     const upstream = (data && data.error && data.error.message) || text.slice(0, 200);
     const status = response.status;
     if (status === 401) {
-      throw new AiError('OpenAI rejected the key saved in this browser (401). Check it in AI settings.', { status, kind: 'http' });
+      throw new AiError('OpenAI rejected the key saved in this browser (401). Check it in AI settings.', { status, kind: 'http', code: 'bad-key' });
     }
     if (status === 429) {
-      throw new AiError('OpenAI says too many requests or no credit left (429). Wait a minute, or check billing.', { status, kind: 'http' });
+      throw new AiError('OpenAI says too many requests or no credit left (429). Wait a minute, or check billing.', { status, kind: 'http', code: 'rate-limited' });
     }
     if (status === 404) {
       throw new AiError('OpenAI does not know the model "' + model + '" for this key (404).', { status, kind: 'http' });
@@ -572,6 +586,8 @@ const WEBAPP_SPEC = Object.freeze({
   proxyExtra: { mode: 'webapp' },
 });
 
+const SERVICE_OFF_MESSAGE = 'The AI service isn\'t switched on yet. Paste an OpenAI key to use it now, or try again later.';
+
 /** Proxy first, then (when allowed) this browser's own key. */
 async function runWithRoutes({ imageDataUrl, note }, spec, opts) {
   const o = opts || {};
@@ -584,7 +600,7 @@ async function runWithRoutes({ imageDataUrl, note }, spec, opts) {
   }
   const cfg = getAiConfig();
   if (!cfg.proxyUrl && !cfg.apiKey) {
-    throw new Error('AI is not set up. Add the server address or an OpenAI key in AI settings.');
+    throw new AiError(SERVICE_OFF_MESSAGE, { kind: 'input', code: 'no-key' });
   }
 
   status('Getting the screenshot ready…');
@@ -605,7 +621,12 @@ async function runWithRoutes({ imageDataUrl, note }, spec, opts) {
       if (err instanceof AiError && err.kind === 'cancelled') throw cancelledError();
       proxyError = err;
       const canFallback = cfg.apiKey && err instanceof AiError && err.fallback;
-      if (!canFallback) throw toPlainError(err);
+      if (!canFallback) {
+        if (!cfg.apiKey && err instanceof AiError && err.code === 'proxy-unreachable') {
+          throw new AiError(SERVICE_OFF_MESSAGE, { status: err.status, kind: err.kind, code: 'proxy-unreachable' });
+        }
+        throw toPlainError(err);
+      }
       try { console.warn('[ai] proxy failed, using browser key:', err.message); } catch (_) { /* ignore */ }
       status('The server did not answer — trying this browser\'s own key…');
     }
@@ -618,7 +639,8 @@ async function runWithRoutes({ imageDataUrl, note }, spec, opts) {
   } catch (err) {
     if (err instanceof AiError && err.kind === 'cancelled') throw cancelledError();
     if (proxyError) {
-      throw toPlainError(new AiError(proxyError.message + ' Backup with this browser\'s key also failed: ' + err.message));
+      throw toPlainError(new AiError(proxyError.message + ' Backup with this browser\'s key also failed: ' + err.message,
+        { status: err.status || 0, kind: err.kind || 'error', code: err.code || '' }));
     }
     throw toPlainError(err);
   }
