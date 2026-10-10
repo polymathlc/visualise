@@ -10,7 +10,7 @@
 // SYSTEM_PROMPT and the reply cleaning below duplicate functions/prompt.js.
 // Keep them in step when editing either copy.
 
-import { readStore, writeStore, shrinkImageDataUrl } from './core.js';
+import { readStore, writeStore, shrinkImageDataUrl } from './core.js?v=1.1.0';
 
 export const AI_STORE_KEY = 'vis_ai';
 export const DEFAULT_PROXY_URL = 'https://us-central1-mathgen--app.cloudfunctions.net/visualiseAi';
