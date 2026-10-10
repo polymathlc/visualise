@@ -1,121 +1,26 @@
 // Picture It · P3 Maths — entry point.
-// Wires the three tabs (question feed, Snap & Play and Parent Studio), the version badge and
-// printing. Each section lives in its own module; this file only connects them.
+// One blank page: "+ Add a question" opens a box, a screenshot goes in, the AI reads the
+// question (multiple choice or free response) and builds a little app for it, and Save
+// keeps just the question and the app. All of that lives in board.js.
 
 // Every local import carries ?v=<version>. Bump it on each release so browsers
-// never mix a new index.html with old cached modules (a stale app.js without
-// the Snap & Play wiring made that tab do nothing).
-import { APP_VERSION, showToast } from './core.js?v=1.1.1';
-import { initFeed, refreshFeed } from './feed.js?v=1.1.1';
-import { initStudio } from './studio.js?v=1.1.1';
-import { initSnap } from './snap.js?v=1.1.1';
-
-const TABS = [
-  { tab: 'tabFeed', view: 'feedView', hash: '#questions' },
-  { tab: 'tabSnap', view: 'snapView', hash: '#snap' },
-  { tab: 'tabStudio', view: 'studioView', hash: '#studio' },
-];
-
-let studioReady = false;
-let snapReady = false;
-let feedDirty = false;
-
-function byId(id) {
-  return document.getElementById(id);
-}
-
-function selectTab(tabId, options) {
-  const opts = options || {};
-  for (const entry of TABS) {
-    const tab = byId(entry.tab);
-    const view = byId(entry.view);
-    if (!tab || !view) continue;
-    const active = entry.tab === tabId;
-    tab.setAttribute('aria-selected', String(active));
-    tab.tabIndex = active ? 0 : -1;
-    view.hidden = !active;
-    if (active && opts.updateHash !== false && location.hash !== entry.hash) {
-      history.replaceState(null, '', entry.hash);
-    }
-  }
-  if (tabId === 'tabStudio' && !studioReady) {
-    studioReady = true;
-    initStudio(byId('studio'), {
-      onChange() {
-        // Rebuild the feed lazily, when the child next looks at it, so typing
-        // in the studio does not churn a feed nobody is watching.
-        feedDirty = true;
-      },
-    });
-  }
-  if (tabId === 'tabSnap' && !snapReady) {
-    snapReady = true;
-    try {
-      initSnap(byId('snap'), {
-        onChange() {
-          feedDirty = true;
-        },
-      });
-    } catch (error) {
-      console.error('Snap & Play failed to start', error);
-      showToast('Snap & Play could not start. Please refresh the page.', 'error');
-    }
-  }
-  if (tabId === 'tabFeed' && feedDirty) {
-    feedDirty = false;
-    refreshFeed();
-  }
-  if (opts.focus) byId(tabId).focus();
-}
-
-function bindTabs() {
-  TABS.forEach((entry, index) => {
-    const tab = byId(entry.tab);
-    if (!tab) return;
-    tab.addEventListener('click', () => selectTab(entry.tab));
-    tab.addEventListener('keydown', event => {
-      if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
-      event.preventDefault();
-      const step = event.key === 'ArrowRight' ? 1 : -1;
-      const next = TABS[(index + step + TABS.length) % TABS.length];
-      selectTab(next.tab, { focus: true });
-    });
-  });
-  window.addEventListener('hashchange', () => {
-    const match = TABS.find(entry => entry.hash === location.hash);
-    if (match) selectTab(match.tab, { updateHash: false });
-  });
-}
-
-function bindHeader() {
-  const badge = byId('versionBadge');
-  if (badge) badge.textContent = APP_VERSION;
-  const print = byId('printButton');
-  if (print) {
-    print.addEventListener('click', () => {
-      // Printing the studio is never useful; always print the questions.
-      selectTab('tabFeed');
-      setTimeout(() => window.print(), 50);
-    });
-  }
-}
+// never mix a new index.html with old cached modules.
+import { APP_VERSION, showToast } from './core.js?v=1.2.0';
+import { initBoard } from './board.js?v=1.2.0';
 
 function start() {
-  bindHeader();
-  bindTabs();
+  const badge = document.getElementById('versionBadge');
+  if (badge) badge.textContent = APP_VERSION;
   try {
-    initFeed({
-      feedEl: byId('feed'),
-      sentinelEl: byId('feedSentinel'),
-      chipsEl: byId('topicChips'),
-      statsEl: byId('statsStrip'),
+    initBoard({
+      listEl: document.getElementById('blocks'),
+      addBtn: document.getElementById('addQuestion'),
+      emptyEl: document.getElementById('emptyNote'),
     });
   } catch (error) {
-    console.error('Feed failed to start', error);
-    showToast('The questions could not load. Please refresh the page.', 'error');
+    console.error('The page failed to start', error);
+    showToast('The page could not start. Please refresh.', 'error');
   }
-  const initial = TABS.find(entry => entry.hash === location.hash) || TABS[0];
-  selectTab(initial.tab, { updateHash: false });
 }
 
 if (document.readyState === 'loading') {

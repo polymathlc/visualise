@@ -1,10 +1,17 @@
 # Picture It · P3 Maths
 
-An endless, scrolling feed of Primary 3 maths questions. Every question comes with a
-picture the child has to open and play with before the answer box unlocks, so they
-stop doing sums blindly.
+One blank page. Press **+ Add a question** and a box opens. Paste, drop or choose a
+screenshot of a maths question: `gpt-6-luna` reads it (multiple choice or free
+response) and builds a little interactive app for it. Press **Save** and the box keeps
+just the question and the app. Add as many as you like; they stay in this browser
+(localStorage `vis_blocks`). Hover a saved box for ✎ edit and 🗑 delete.
 
 Live site: https://polymathlc.github.io/visualise/
+
+The page is `index.html` + `app.js` + `board.js` + `board.css`. The older feed,
+Snap & Play and Parent Studio modules are still in the repo but no longer loaded.
+
+## Older notes (previous version)
 
 ## For the child
 - **Questions** tab: scroll forever. 15 P3 topics (add/subtract to 10 000, times

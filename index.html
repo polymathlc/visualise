@@ -4,13 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Picture It · P3 Maths</title>
-  <meta name="description" content="An endless feed of Primary 3 maths questions, each with a picture to build before you answer.">
+  <meta name="description" content="Paste a screenshot of a maths question and get a little app that helps you see it.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='22' width='34' height='14' rx='4' fill='%23A5D6A7'/%3E%3Crect x='40' y='22' width='18' height='14' rx='4' fill='%23C8E6C9'/%3E%3Cpath d='M6 46 h52' stroke='%23333' stroke-width='3'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="styles.css?v=1.1.1">
-  <link rel="stylesheet" href="feed.css?v=1.1.1">
-  <link rel="stylesheet" href="studio.css?v=1.1.1">
-  <link rel="stylesheet" href="snap.css?v=1.1.1">
-  <link rel="modulepreload" href="app.js?v=1.1.1">
+  <link rel="stylesheet" href="styles.css?v=1.2.0">
+  <link rel="stylesheet" href="board.css?v=1.2.0">
+  <link rel="modulepreload" href="app.js?v=1.2.0">
 </head>
 <body>
   <header class="polymath-header">
@@ -21,72 +19,19 @@
       <span class="brand-sub">P3 Maths · see it before you solve it</span>
     </div>
     <div class="header-spacer"></div>
-    <span class="version-badge" id="versionBadge" data-tooltip="The version you are running">v1.1.1</span>
-    <button type="button" class="icon-button" id="printButton" aria-label="Print these questions" data-tooltip="Print on A4">
-      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 14h12v7H6z"/><circle cx="17.5" cy="12" r="0.6" fill="currentColor"/>
-      </svg>
-    </button>
+    <span class="version-badge" id="versionBadge" data-tooltip="The version you are running">v1.2.0</span>
   </header>
 
-  <nav class="tabs" role="tablist" aria-label="Sections">
-    <button type="button" class="tab" role="tab" id="tabFeed" aria-controls="feedView" aria-selected="true">🧮 Questions</button>
-    <button type="button" class="tab" role="tab" id="tabSnap" aria-controls="snapView" aria-selected="false">📸 Snap &amp; Play</button>
-    <button type="button" class="tab" role="tab" id="tabStudio" aria-controls="studioView" aria-selected="false">🛠 Parent Studio</button>
-  </nav>
-
-  <main>
-    <!-- ───────────────────────── THE FEED ───────────────────────── -->
-    <section class="view" id="feedView" role="tabpanel" aria-labelledby="tabFeed">
-      <div class="intro stagger">
-        <h1>Picture it first</h1>
-        <p class="subtitle">Every question comes with a picture you can build. Draw the bars, jump along the line, group the dots — then answer.</p>
-        <p>
-          Good mathematicians don't do sums blindly. They <strong>see</strong> the problem first. So each card below
-          asks you to open its picture before the answer box unlocks. Play with it until the question makes sense,
-          then type your answer. The questions never run out — just keep scrolling.
-        </p>
-      </div>
-
-      <div class="feed-toolbar" id="feedToolbar">
-        <div class="chip-row" id="topicChips" role="group" aria-label="Choose topics"></div>
-        <div class="stats-strip" id="statsStrip" aria-live="polite"></div>
-      </div>
-
-      <div class="feed" id="feed" aria-live="polite"></div>
-      <div class="feed-sentinel" id="feedSentinel" aria-hidden="true"><div class="dots"><span></span><span></span><span></span></div></div>
-
-      <div class="takeaway">
-        <strong>Remember:</strong> if a question feels confusing, draw it. A bar, a line, a few dots — the picture
-        usually tells you whether to add, take away, multiply or divide.
-      </div>
-    </section>
-
-    <!-- ───────────────────────── SNAP & PLAY ───────────────────────── -->
-    <section class="view" id="snapView" role="tabpanel" aria-labelledby="tabSnap" hidden>
-      <div class="intro stagger">
-        <h1>Snap &amp; Play</h1>
-        <p class="subtitle">Paste a screenshot of any question. The AI builds a little app to play with until it makes sense.</p>
-      </div>
-      <div class="snap" id="snap"></div>
-    </section>
-
-    <!-- ───────────────────────── PARENT STUDIO ───────────────────────── -->
-    <section class="view" id="studioView" role="tabpanel" aria-labelledby="tabStudio" hidden>
-      <div class="intro stagger">
-        <h1>Parent Studio</h1>
-        <p class="subtitle">Add your own questions, paste in a visualiser, or let the AI build one from a screenshot.</p>
-        <p>
-          Everything you make here is mixed into the question feed. Questions you add are kept in this browser,
-          and can be exported to a file and imported on another device.
-        </p>
-      </div>
-      <div class="studio" id="studio"></div>
-    </section>
+  <main class="board">
+    <p class="board-empty" id="emptyNote" hidden>Nothing here yet. Press <strong>+ Add a question</strong> to start.</p>
+    <div class="board-list" id="blocks" aria-live="polite"></div>
+    <div class="board-add-row">
+      <button type="button" class="board-add" id="addQuestion">+ Add a question</button>
+    </div>
   </main>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-  <script type="module" src="app.js?v=1.1.1"></script>
+  <script type="module" src="app.js?v=1.2.0"></script>
 </body>
 </html>

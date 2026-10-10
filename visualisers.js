@@ -11,7 +11,7 @@
 //   • leaves a .vis-readout the print stylesheet keeps, so a printed sheet
 //     shows the picture as the child left it.
 // ─────────────────────────────────────────────────────────────────────────
-import { el, formatNumber } from './core.js?v=1.1.1';
+import { el, formatNumber } from './core.js?v=1.2.0';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 

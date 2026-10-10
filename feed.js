@@ -44,9 +44,9 @@ import {
   burstConfetti,
   extractNumbers,
   mountSandbox,
-} from './core.js?v=1.1.1';
-import { renderVisual } from './visualisers.js?v=1.1.1';
-import { TOPICS, nextQuestion, generateQuestion } from './questions.js?v=1.1.1';
+} from './core.js?v=1.2.0';
+import { renderVisual } from './visualisers.js?v=1.2.0';
+import { TOPICS, nextQuestion, generateQuestion } from './questions.js?v=1.2.0';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Tunables.
