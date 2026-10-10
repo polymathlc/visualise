@@ -121,7 +121,7 @@ export function el(tag, attrs, children) {
     }
   }
   if (children != null) {
-    for (const child of [].concat(children)) {
+    for (const child of [].concat(children).flat(Infinity)) {
       if (child == null || child === false) continue;
       node.appendChild(typeof child === 'string' ? document.createTextNode(child) : child);
     }
