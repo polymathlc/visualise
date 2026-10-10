@@ -259,6 +259,47 @@
 .board-options li { display: flex; gap: 10px; align-items: baseline; }
 .board-option-label { font-weight: 700; min-width: 2.2em; }
 
+/* ── which AI builds this question (v1.2.2) ── */
+.board-model-row {
+  display: flex;
+  align-items: center;
+  gap: 10px 14px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--paper);
+}
+.board-model-label { font-weight: 700; }
+.board-select {
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--surface);
+  color: var(--text);
+  max-width: 100%;
+}
+.board-select:focus { outline: 2px solid var(--accent-strong); outline-offset: 1px; }
+.board-select:disabled { opacity: .6; cursor: not-allowed; }
+.board-model-note { color: var(--text-muted); font-size: .9rem; margin: 0; line-height: 1.5; flex: 1 1 100%; }
+
+/* ── tweak the app with a typed instruction ── */
+.board-tweak {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: var(--space-md, 16px);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--paper);
+}
+.board-tweak .board-textarea { min-height: 80px; }
+.board-tweak-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.board-tweak-note { color: var(--text-muted); font-size: .9rem; margin: 0; line-height: 1.5; }
+.board-tweak-history-title { font-weight: 700; font-size: .9rem; margin: 6px 0 0; }
+.board-tweak-history { margin: 0; padding-left: 1.2em; color: var(--text-muted); font-size: .9rem; display: grid; gap: 4px; }
+
 @media (max-width: 640px) {
   .board { padding-top: var(--space-lg, 24px); }
   .board-box { padding: var(--space-md, 16px); }
