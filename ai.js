@@ -23,6 +23,7 @@ export const AI_DEFAULTS = Object.freeze({
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 const REQUEST_TIMEOUT_MS = 90000;
+const WEBAPP_TIMEOUT_MS = 180000;
 const MAX_IMAGE_CHARS = 7 * 1024 * 1024;
 const MAX_NOTE_CHARS = 2000;
 
@@ -217,6 +218,190 @@ export function cleanVisualiserReply(raw) {
   return { name, questionText, answers, hint: cleanString(obj.hint, 600), code };
 }
 
+// ═════════════════════════════════════════════════════════════════════════
+// Snap & Play: a whole standalone web app built from one screenshot.
+// (Duplicate of functions/prompt.js — keep the two copies in step.)
+// ═════════════════════════════════════════════════════════════════════════
+
+export const WEBAPP_MAX_HTML_CHARS = 400000;
+
+export const WEBAPP_SYSTEM_PROMPT = `You are an expert Singapore Primary 3 (P3) mathematics teacher AND a senior front-end engineer who builds
+Brilliant.org-style interactive explorables for children aged 8-9.
+You receive a screenshot (or photo) of ONE P3 maths question, plus an optional note from a parent.
+Build ONE complete, self-contained interactive web app that lets the child PLAY with the question until they
+understand its structure, then try the answer themselves.
+
+STEP 1 - READ THE IMAGE CAREFULLY
+- Transcribe the question exactly (numbers, units, names, all parts). Join lines with single spaces.
+- If there are several parts (a), (b) ..., build the app around ALL parts, one step or tab per part.
+- If a diagram, table, picture graph, clock, ruler, number line or shape is shown, rebuild it faithfully in SVG.
+- Work out the correct answer(s) privately. Double-check the arithmetic twice. P3 scope only: whole numbers
+  to 10 000, the four operations, times tables 6-9, simple fractions (equivalent, compare, add/subtract like
+  denominators), money, length/mass/volume, time (24h not needed), angles, perpendicular/parallel lines,
+  area and perimeter of rectangles and squares in square units, bar graphs. Use the model method (bar models)
+  the way Singapore schools teach it.
+
+STEP 2 - DESIGN THE PLAY
+Choose the 2-4 most helpful interactions for THIS question. Ideas:
+- Bar model the child builds: draggable / resizable bars, units that snap together, a "?" bracket for the unknown,
+  labels that appear when tapped. Comparison questions show the difference as a separate highlighted segment.
+- Manipulatives: counters, base-ten blocks (thousands, hundreds, tens, ones) that can be regrouped by tapping,
+  coins and notes for money, fraction strips/pies that can be split and shaded, a clock with draggable hands,
+  a number line with a draggable jump arrow, a grid for area that the child paints square by square.
+- Sliders or +/- steppers to change a number and SEE how the model changes ("what if Ali had 10 more?").
+  Always allow resetting to the question's own numbers.
+- Step-by-step reveal: "Step 1: What do we know?" -> "Step 2: What are we finding?" -> "Step 3: Draw it" ->
+  "Step 4: Which operation?" Each step is unlocked by a button; earlier steps stay visible.
+- "Check my thinking": small multiple-choice or fill-in prompts about the STRUCTURE (e.g. "Is the total bigger or
+  smaller than 345?", "Which bar is longer?", "Should we add or subtract?") with kind, specific feedback.
+- A final answer box: the child types an answer and taps "Check". Accept equivalent forms (e.g. "1/2" and "0.5",
+  "$4.50" and "4.50", "450 cents" when sensible, with or without units, spaces and commas). Correct -> a cheerful
+  animated tick and a short "why it works" explanation. Wrong -> gentle, specific nudge (e.g. "Close! Check the
+  tens"), never the answer.
+- The answer is NEVER shown automatically. Only after at least one attempt, offer a "Show me the answer" button
+  that the child must press (ask "Are you sure? Try once more first?" and require a second tap). Then reveal the
+  worked solution step by step, matched to the bar model.
+- A "Hint" button that gives up to 3 increasingly specific hints, one per tap, none of which states the answer.
+
+STEP 3 - BUILD IT (technical rules, all mandatory)
+- Output ONE complete HTML document: <!doctype html><html lang="en"><head>...</head><body>...</body></html>.
+- Include <meta charset="utf-8"> and <meta name="viewport" content="width=device-width,initial-scale=1">.
+- ALL CSS in one <style> tag, ALL JavaScript in <script> tags in the same document. No external files at all:
+  no CDN, no fonts, no images by URL, no fetch/XMLHttpRequest/WebSocket, no import(). Draw pictures with inline SVG
+  or CSS; emoji are fine.
+- Do NOT use localStorage, sessionStorage, IndexedDB, cookies, alert(), confirm(), prompt(), window.open() or
+  parent/top navigation. The app runs in a sandboxed iframe (allow-scripts only), so these would break. Keep state
+  in plain JS variables.
+- Vanilla JS only, wrapped in an IIFE with 'use strict'. No console errors. Guard every DOM lookup.
+- Pointer Events for every drag (pointerdown/move/up with setPointerCapture), so mouse, pen and touch all work.
+  Set touch-action: none on draggable areas only, so the page still scrolls elsewhere. Also support keyboard:
+  every draggable or slider-like control must be operable with arrow keys or have +/- buttons.
+- Layout must work from 320px wide phones to desktops: fluid widths, SVG with viewBox and width:100%,
+  flex-wrap, no horizontal scrolling, no fixed pixel widths above 300px. Text at least 16px, touch targets at
+  least 44x44px.
+- Accessible: real <button> elements with text, aria-live="polite" region for feedback, SVG role="img" with
+  aria-label, visible focus rings, colour is never the only signal, contrast at least 4.5:1 for text.
+- Respect prefers-reduced-motion (turn off non-essential animation).
+
+STEP 4 - VISUAL STYLE (Polymath / Brilliant style)
+- White background (#FFFFFF), text #1A1A1A, secondary text #4A4A4A, borders #ECECEC.
+- Mint accent #A5D6A7 (lighter #C8E6C9, wash #F1F8F1, deep ink #1B5E20 for text on mint).
+  Supporting soft colours for different quantities: peach #FFE0B2, sky #BBDEFB, lavender #D1C4E9, rose #FFCDD2.
+- font-family: 'Century Gothic', CenturyGothic, AppleGothic, 'Segoe UI', sans-serif.
+- Rounded everything (cards 20px, buttons pill-shaped), soft layered shadows, generous whitespace, one idea per card.
+- Smooth, springy micro-animations (transform/opacity, 200-400ms). Celebrate success with a small confetti or
+  bounce made in CSS/JS (no libraries).
+- A clear header: a friendly title, the question text in a calm card, then the play area, then the answer area.
+- Speak to the child warmly and simply ("Let's find out!", "Drag the bar to show Ben's stickers"). Short sentences.
+  British/Singapore spelling.
+
+STEP 5 - CHECK YOURSELF BEFORE REPLYING
+- The numbers in the app match the question exactly. The answer you accept is correct (re-compute it).
+- The answer text does not appear anywhere visible before the child asks for it (it may live in a JS variable).
+- All brackets/tags are closed; the document would run as-is when saved as an .html file and opened offline.
+
+OUTPUT FORMAT
+Reply with ONE JSON object only, no markdown, no code fences, exactly these keys:
+{
+  "title": "short friendly title for the app, max 60 chars, e.g. 'Ali and Ben's marbles'",
+  "questionText": "the transcribed question",
+  "answers": ["every accepted final answer string, e.g. '245', '245 marbles'"],
+  "hint": "one sentence for a parent: what the model looks like, without the answer",
+  "html": "the complete HTML document as one string"
+}`;
+
+/** User-turn text for the web app mode. */
+export function buildWebappUserText(note) {
+  const clean = String(note || '').trim().slice(0, 2000);
+  return [
+    'Here is a screenshot of a P3 maths question. Read it, then build the interactive web app and return the JSON object.',
+    clean ? `Note from the parent (follow it if sensible): ${clean}` : 'There is no parent note.',
+  ].join('\n');
+}
+
+/** OpenAI chat/completions body for the web app mode (bigger budget). */
+export function buildWebappChatBody({ imageDataUrl, note, model }) {
+  return {
+    model: model || DEFAULT_MODEL,
+    response_format: { type: 'json_object' },
+    max_completion_tokens: 48000,
+    messages: [
+      { role: 'system', content: WEBAPP_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: buildWebappUserText(note) },
+          { type: 'image_url', image_url: { url: imageDataUrl, detail: 'high' } },
+        ],
+      },
+    ],
+  };
+}
+
+/** Make sure an HTML string is a full document with charset and viewport. */
+export function ensureFullDocument(html, title) {
+  let doc = String(html || '').trim();
+  const safeTitle = String(title || 'Snap & Play').replace(/[<>&"]/g, '');
+  if (!/<html[\s>]/i.test(doc)) {
+    let headExtra = '';
+    let body = doc;
+    // A fragment may still carry its own <head> or <body>; peel them.
+    const headMatch = body.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
+    if (headMatch) { headExtra = headMatch[1]; body = body.replace(headMatch[0], ''); }
+    const bodyMatch = body.match(/<body[^>]*>([\s\S]*?)(<\/body>|$)/i);
+    if (bodyMatch) body = bodyMatch[1];
+    doc = '<!doctype html><html lang="en"><head><title>' + safeTitle + '</title>' + headExtra +
+      '</head><body>' + body + '</body></html>';
+  }
+  if (!/^<!doctype/i.test(doc)) doc = '<!doctype html>\n' + doc;
+  if (!/<head[\s>]/i.test(doc)) doc = doc.replace(/<html[^>]*>/i, (m) => m + '<head></head>');
+  // Viewport first, then charset, so charset ends up as the very first tag.
+  if (!/<meta[^>]+name\s*=\s*["']?viewport/i.test(doc)) {
+    doc = doc.replace(/<head[^>]*>/i, (m) => m + '<meta name="viewport" content="width=device-width,initial-scale=1">');
+  }
+  if (!/<meta[^>]+charset/i.test(doc)) doc = doc.replace(/<head[^>]*>/i, (m) => m + '<meta charset="utf-8">');
+  return doc;
+}
+
+/**
+ * Validate a web app reply into {title, questionText, answers, hint, html}.
+ * Accepts `code` instead of `html` (older proxies answer in visualiser shape).
+ */
+export function cleanWebappReply(raw) {
+  const obj = typeof raw === 'string' ? parseJsonLoose(raw) : raw;
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+    throw new Error('The AI reply was not a JSON object.');
+  }
+  let html = stripFences(obj.html != null ? String(obj.html) : obj.code != null ? String(obj.code) : '');
+  html = html
+    .replace(/<script\b[^>]*\bsrc\s*=[^>]*>\s*<\/script>/gi, '')
+    .replace(/<link\b[^>]*rel\s*=\s*["']?(stylesheet|preload|modulepreload|import)[^>]*>/gi, '')
+    .trim();
+  if (!html) throw new Error('The AI reply did not include the web app.');
+  if (html.length > WEBAPP_MAX_HTML_CHARS) throw new Error('The AI web app was too long to use.');
+
+  let answers = obj.answers;
+  if (typeof answers === 'string' || typeof answers === 'number') answers = [answers];
+  if (!Array.isArray(answers)) answers = [];
+  const seen = new Set();
+  answers = answers
+    .map((a) => cleanString(a, 80))
+    .filter((a) => a && !seen.has(a.toLowerCase()) && seen.add(a.toLowerCase()))
+    .slice(0, 12);
+
+  const questionText = cleanString(obj.questionText || obj.question || obj.text, 4000);
+  const title = cleanString(obj.title || obj.name, 60) ||
+    (questionText ? questionText.slice(0, 48) + (questionText.length > 48 ? '...' : '') : 'Snap & Play app');
+
+  return {
+    title,
+    questionText,
+    answers,
+    hint: cleanString(obj.hint, 600),
+    html: ensureFullDocument(html, title),
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Transport
 // ─────────────────────────────────────────────────────────────────────────
@@ -232,12 +417,21 @@ class AiError extends Error {
 }
 
 /** fetch with a hard timeout; maps abort/network failures to AiError. */
-async function fetchWithTimeout(url, init, timeoutMs, label) {
+async function fetchWithTimeout(url, init, timeoutMs, label, outerSignal) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let cancelledByCaller = false;
+  const onOuterAbort = () => { cancelledByCaller = true; controller.abort(); };
+  if (outerSignal) {
+    if (outerSignal.aborted) onOuterAbort();
+    else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
+  }
   try {
     return await fetch(url, Object.assign({}, init, { signal: controller.signal }));
   } catch (err) {
+    if (cancelledByCaller) {
+      throw new AiError('Cancelled.', { kind: 'cancelled' });
+    }
     if (err && err.name === 'AbortError') {
       throw new AiError(label + ' took longer than ' + Math.round(timeoutMs / 1000) +
         ' seconds. Try again, or crop the screenshot to just the question.', { kind: 'timeout' });
@@ -246,6 +440,7 @@ async function fetchWithTimeout(url, init, timeoutMs, label) {
     throw new AiError('Could not reach ' + label + ' (offline or blocked).', { kind: 'network', fallback: true });
   } finally {
     clearTimeout(timer);
+    if (outerSignal) outerSignal.removeEventListener('abort', onOuterAbort);
   }
 }
 
@@ -254,12 +449,23 @@ async function readJson(response) {
   try { return { data: JSON.parse(text), text }; } catch (_) { return { data: null, text }; }
 }
 
-async function callProxy(proxyUrl, payload) {
+// A "route spec" says how one kind of request is built and cleaned, so the
+// visualiser and the Snap & Play web app share every transport rule.
+const VISUALISER_SPEC = Object.freeze({
+  buildBody: (args) => buildChatBody(args),
+  clean: (raw) => cleanVisualiserReply(raw),
+  timeoutMs: REQUEST_TIMEOUT_MS,
+  proxyExtra: null,
+});
+
+async function callProxy(proxyUrl, payload, spec, signal) {
+  const s = spec || VISUALISER_SPEC;
+  const body = s.proxyExtra ? Object.assign({}, s.proxyExtra, payload) : payload;
   const response = await fetchWithTimeout(proxyUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  }, REQUEST_TIMEOUT_MS, 'The AI server');
+    body: JSON.stringify(body),
+  }, s.timeoutMs, 'The AI server', signal);
 
   const { data } = await readJson(response);
   if (!response.ok || !data || data.ok === false) {
@@ -286,18 +492,19 @@ async function callProxy(proxyUrl, payload) {
     throw new AiError(serverMsg || ('The AI server failed (' + status + ').'), { status, kind: 'http', fallback: true });
   }
   try {
-    return cleanVisualiserReply(data.result || data);
+    return s.clean(data.result || data);
   } catch (err) {
     throw new AiError(err.message, { kind: 'format' });
   }
 }
 
-async function callOpenAiDirect(apiKey, model, payload) {
+async function callOpenAiDirect(apiKey, model, payload, spec, signal) {
+  const s = spec || VISUALISER_SPEC;
   const response = await fetchWithTimeout(OPENAI_URL, {
     method: 'POST',
     headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify(buildChatBody({ imageDataUrl: payload.imageDataUrl, note: payload.note, model })),
-  }, REQUEST_TIMEOUT_MS, 'OpenAI');
+    body: JSON.stringify(s.buildBody({ imageDataUrl: payload.imageDataUrl, note: payload.note, model })),
+  }, s.timeoutMs, 'OpenAI', signal);
 
   const { data, text } = await readJson(response);
   if (!response.ok) {
@@ -330,7 +537,7 @@ async function callOpenAiDirect(apiKey, model, payload) {
     throw new AiError('OpenAI returned an empty reply. Please try again.', { kind: 'format' });
   }
   try {
-    return cleanVisualiserReply(content);
+    return s.clean(content);
   } catch (err) {
     throw new AiError(err.message, { kind: 'format' });
   }
@@ -345,6 +552,33 @@ async function callOpenAiDirect(apiKey, model, payload) {
  * Rejects with an Error whose message is safe to show to a parent.
  */
 export async function generateVisualiser({ imageDataUrl, note } = {}) {
+  return runWithRoutes({ imageDataUrl, note }, VISUALISER_SPEC);
+}
+
+/**
+ * Snap & Play: read a screenshot and build a whole standalone web app.
+ * Resolves {title, questionText, answers:[string], hint, html} where html is
+ * one complete self-contained HTML document. `onStatus(text)` hears progress;
+ * `signal` (an AbortSignal) cancels. A cancel rejects with err.cancelled = true.
+ */
+export async function generateWebapp({ imageDataUrl, note, onStatus, signal } = {}) {
+  return runWithRoutes({ imageDataUrl, note }, WEBAPP_SPEC, { onStatus, signal });
+}
+
+const WEBAPP_SPEC = Object.freeze({
+  buildBody: (args) => buildWebappChatBody(args),
+  clean: (raw) => cleanWebappReply(raw),
+  timeoutMs: WEBAPP_TIMEOUT_MS,
+  proxyExtra: { mode: 'webapp' },
+});
+
+/** Proxy first, then (when allowed) this browser's own key. */
+async function runWithRoutes({ imageDataUrl, note }, spec, opts) {
+  const o = opts || {};
+  const status = (text) => {
+    if (typeof o.onStatus !== 'function') return;
+    try { o.onStatus(text); } catch (_) { /* a broken listener must not break the call */ }
+  };
   if (typeof imageDataUrl !== 'string' || !/^data:image\/[a-z0-9.+-]+;base64,/i.test(imageDataUrl)) {
     throw new Error('Add a screenshot of the question first.');
   }
@@ -353,33 +587,47 @@ export async function generateVisualiser({ imageDataUrl, note } = {}) {
     throw new Error('AI is not set up. Add the server address or an OpenAI key in AI settings.');
   }
 
+  status('Getting the screenshot ready…');
   let image = imageDataUrl;
   try { image = await shrinkImageDataUrl(imageDataUrl, 1600); } catch (_) { /* keep original */ }
   if (image.length > MAX_IMAGE_CHARS) {
     throw new Error('The screenshot is too large. Crop it to just the question and try again.');
   }
+  if (o.signal && o.signal.aborted) throw cancelledError();
   const payload = { imageDataUrl: image, note: String(note || '').slice(0, MAX_NOTE_CHARS) };
 
   let proxyError = null;
   if (cfg.proxyUrl) {
     try {
-      return await callProxy(cfg.proxyUrl, payload);
+      status('Sending it to the AI server…');
+      return await callProxy(cfg.proxyUrl, payload, spec, o.signal);
     } catch (err) {
+      if (err instanceof AiError && err.kind === 'cancelled') throw cancelledError();
       proxyError = err;
       const canFallback = cfg.apiKey && err instanceof AiError && err.fallback;
       if (!canFallback) throw toPlainError(err);
       try { console.warn('[ai] proxy failed, using browser key:', err.message); } catch (_) { /* ignore */ }
+      status('The server did not answer — trying this browser\'s own key…');
     }
+  } else {
+    status('Sending it to OpenAI with this browser\'s key…');
   }
 
   try {
-    return await callOpenAiDirect(cfg.apiKey, cfg.model, payload);
+    return await callOpenAiDirect(cfg.apiKey, cfg.model, payload, spec, o.signal);
   } catch (err) {
+    if (err instanceof AiError && err.kind === 'cancelled') throw cancelledError();
     if (proxyError) {
       throw toPlainError(new AiError(proxyError.message + ' Backup with this browser\'s key also failed: ' + err.message));
     }
     throw toPlainError(err);
   }
+}
+
+function cancelledError() {
+  const err = new Error('Cancelled.');
+  err.cancelled = true;
+  return err;
 }
 
 function toPlainError(err) {

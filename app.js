@@ -5,13 +5,16 @@
 import { APP_VERSION, showToast } from './core.js';
 import { initFeed, refreshFeed } from './feed.js';
 import { initStudio } from './studio.js';
+import { initSnap } from './snap.js';
 
 const TABS = [
   { tab: 'tabFeed', view: 'feedView', hash: '#questions' },
+  { tab: 'tabSnap', view: 'snapView', hash: '#snap' },
   { tab: 'tabStudio', view: 'studioView', hash: '#studio' },
 ];
 
 let studioReady = false;
+let snapReady = false;
 let feedDirty = false;
 
 function byId(id) {
@@ -38,6 +41,14 @@ function selectTab(tabId, options) {
       onChange() {
         // Rebuild the feed lazily, when the child next looks at it, so typing
         // in the studio does not churn a feed nobody is watching.
+        feedDirty = true;
+      },
+    });
+  }
+  if (tabId === 'tabSnap' && !snapReady) {
+    snapReady = true;
+    initSnap(byId('snap'), {
+      onChange() {
         feedDirty = true;
       },
     });
