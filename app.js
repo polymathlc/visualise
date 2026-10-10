@@ -5,8 +5,9 @@
 
 // Every local import carries ?v=<version>. Bump it on each release so browsers
 // never mix a new index.html with old cached modules.
-import { APP_VERSION, showToast } from './core.js?v=1.2.2';
-import { initBoard } from './board.js?v=1.2.2';
+import { APP_VERSION, showToast } from './core.js?v=1.3.0';
+import { initBoard, onBlocksSaved, getBoardBlocks, setBoardBlocks } from './board.js?v=1.3.0';
+import { initCloud } from './cloud.js?v=1.3.0';
 
 function start() {
   const badge = document.getElementById('versionBadge');
@@ -20,6 +21,12 @@ function start() {
   } catch (error) {
     console.error('The page failed to start', error);
     showToast('The page could not start. Please refresh.', 'error');
+    return;
+  }
+  try {
+    initCloud({ getBlocks: getBoardBlocks, setBlocks: setBoardBlocks, onChange: onBlocksSaved });
+  } catch (error) {
+    console.warn('Cloud save could not start; the board is kept on this device', error);
   }
 }
 

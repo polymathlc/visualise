@@ -10,7 +10,7 @@
 // SYSTEM_PROMPT and the reply cleaning below duplicate functions/prompt.js.
 // Keep them in step when editing either copy.
 
-import { readStore, writeStore, shrinkImageDataUrl } from './core.js?v=1.2.2';
+import { readStore, writeStore, shrinkImageDataUrl } from './core.js?v=1.3.0';
 
 export const AI_STORE_KEY = 'vis_ai';
 export const DEFAULT_PROXY_URL = 'https://us-central1-mathgen--app.cloudfunctions.net/visualiseAi';
@@ -307,8 +307,12 @@ Reply with ONE JSON object only, no markdown, no code fences, exactly these keys
   "questionText": "the transcribed question",
   "answers": ["every accepted final answer string, e.g. '245', '245 marbles'"],
   "hint": "one sentence for a parent: what the model looks like, without the answer",
-  "html": "the complete HTML document as one string"
-}`;
+  "html": "the complete HTML document as one string",
+  "diagram": {"box_2d": [ymin, xmin, ymax, xmax]} or null
+}
+"diagram": if the screenshot contains a figure, diagram, table, graph or picture the child needs to read the
+question, give its bounding box as integers 0-1000 (fraction of the screenshot height/width x 1000), covering the
+whole figure with its labels but not the question sentences. Use null when there is no figure.`;
 
 /** User-turn text for the web app mode. */
 export function buildWebappUserText(note) {
@@ -471,7 +475,25 @@ export function cleanWebappReply(raw) {
     answers,
     hint: cleanString(obj.hint, 600),
     html: ensureFullDocument(html, title),
+    diagram: cleanDiagram(obj.diagram),
   };
+}
+
+/**
+ * Validate the figure box the AI found: {box_2d:[ymin,xmin,ymax,xmax]} on a
+ * 0-1000 scale. Values are clamped; max must exceed min; a box under 2% of the
+ * screenshot is dropped (it is a speck, not a figure). Returns null otherwise.
+ */
+export function cleanDiagram(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const box = Array.isArray(raw) ? raw : raw.box_2d;
+  if (!Array.isArray(box) || box.length !== 4) return null;
+  const n = box.map((v) => Number(v));
+  if (n.some((v) => !Number.isFinite(v))) return null;
+  const [ymin, xmin, ymax, xmax] = n.map((v) => Math.max(0, Math.min(1000, Math.round(v))));
+  if (ymax <= ymin || xmax <= xmin) return null;
+  if ((ymax - ymin) * (xmax - xmin) < 0.02 * 1000 * 1000) return null;
+  return { box_2d: [ymin, xmin, ymax, xmax] };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -748,6 +770,43 @@ async function runWithRoutes(input, spec, opts) {
     }
     throw toPlainError(err);
   }
+}
+
+const ENHANCE_TIMEOUT_MS = 170000;
+
+/**
+ * Ask the proxy to redraw a cropped figure as a clean diagram. Resolves the
+ * new image as a data URL (data:image/...). Throws on any failure, so the
+ * caller can fall back to a local clean-up.
+ */
+export async function enhanceDiagram({ imageDataUrl, signal } = {}) {
+  if (typeof imageDataUrl !== 'string' || !/^data:image\//.test(imageDataUrl)) {
+    throw new AiError('There is no picture to clean up.', { kind: 'input' });
+  }
+  const proxyUrl = getAiConfig().proxyUrl || DEFAULT_PROXY_URL;
+  let response;
+  try {
+    response = await fetchWithTimeout(proxyUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'enhance', imageDataUrl }),
+    }, ENHANCE_TIMEOUT_MS, 'the AI server', signal, 'proxy-unreachable');
+  } catch (err) {
+    if (err instanceof AiError && err.kind === 'cancelled') throw cancelledError();
+    throw toPlainError(err);
+  }
+  const { data } = await readJson(response);
+  if (!response.ok || !data || data.ok === false) {
+    const serverMsg = data && typeof data.error === 'string' ? data.error : '';
+    throw new AiError(serverMsg || ('The diagram clean-up failed (' + response.status + ').'),
+      { status: response.status, kind: 'http' });
+  }
+  const result = data.result && typeof data.result === 'object' ? data.result : data;
+  const url = result && result.imageDataUrl;
+  if (typeof url !== 'string' || !/^data:image\//.test(url)) {
+    throw new AiError('The diagram clean-up did not return a picture.', { kind: 'format' });
+  }
+  return url;
 }
 
 function cancelledError() {
