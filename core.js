@@ -10,7 +10,7 @@
 // channel back is postMessage, and the page only listens for one message
 // shape — a height report — so the frame can size itself to its content.
 
-export const APP_VERSION = 'v1.2.0';
+export const APP_VERSION = 'v1.2.1';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Storage. Every key is prefixed `vis_` so nothing here can collide with the

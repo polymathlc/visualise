@@ -10,8 +10,8 @@
 // box holds runs in <iframe sandbox="allow-scripts"> with srcdoc: an opaque
 // origin, so a generated app can never read this site's storage or DOM.
 
-import { readStore, writeStore, uid, escapeHtml, el, showToast, readImageFile } from './core.js?v=1.2.0';
-import { generateWebapp, saveAiConfig, getAiConfig } from './ai.js?v=1.2.0';
+import { readStore, writeStore, uid, escapeHtml, el, showToast, readImageFile } from './core.js?v=1.2.1';
+import { generateWebapp, saveAiConfig, getAiConfig } from './ai.js?v=1.2.1';
 
 const BLOCKS_KEY = 'vis_blocks';
 const MAX_BLOCKS = 200;
@@ -492,9 +492,21 @@ function createSavedBox(board, block, index) {
   box.appendChild(tools);
   box.appendChild(el('div', { class: 'board-num' }, String(index + 1)));
   box.appendChild(questionView(block));
-  const appHost = el('div', { class: 'board-app' });
-  box.appendChild(appHost);
-  mountApp(appHost, block.html, block.title);
+  // The app starts hidden. It is only built the first time it is shown, so a long
+  // board does not load every app at once; hiding it again keeps its state.
+  const appId = uid('app');
+  const toggle = el('button', { type: 'button', class: 'board-btn board-reveal',
+    'aria-expanded': 'false', 'aria-controls': appId }, '▶ Show the app');
+  const appHost = el('div', { class: 'board-app', id: appId, hidden: '' });
+  box.append(toggle, appHost);
+  let mounted = false;
+  toggle.addEventListener('click', () => {
+    const open = appHost.hidden;
+    if (open && !mounted) { mountApp(appHost, block.html, block.title); mounted = true; }
+    appHost.hidden = !open;
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.textContent = open ? '▼ Hide the app' : '▶ Show the app';
+  });
 
   editBtn.addEventListener('click', () => board.edit(block, box));
   delBtn.addEventListener('click', () => {
