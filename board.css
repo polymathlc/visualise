@@ -129,11 +129,25 @@
 .board-preview {
   max-width: 100%;
   max-height: 280px;
-  object-fit: contain;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: center;
   border-radius: var(--radius-sm, 8px);
   border: 1px solid var(--border);
-  align-self: center;
+  align-self: stretch;
   background: #fff;
+  flex-shrink: 0;
+}
+.board-preview[hidden] { display: none; }
+/* The screenshot must stay inside its frame, or it spills over the form below. */
+.board-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 278px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
 }
 
 /* ── status ── */
