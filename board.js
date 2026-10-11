@@ -10,12 +10,12 @@
 // box holds runs in <iframe sandbox="allow-scripts"> with srcdoc: an opaque
 // origin, so a generated app can never read this site's storage or DOM.
 
-import { readStore, writeStore, uid, escapeHtml, el, showToast, readImageFile } from './core.js?v=1.5.2';
-import { generateWebapp, tweakWebapp, saveAiConfig, getAiConfig, MODEL_CHOICES, enhanceDiagram, colouriseDiagram } from './ai.js?v=1.5.2';
-import { openTouchUp } from './touchup.js?v=1.5.2';
-import { SYL_LOS, SYL_LO_BY_ID, SYL_LEVELS } from './syllabus.js?v=1.5.2';
-import { classifyBatch, needsClassify } from './classify.js?v=1.5.2';
-import { printQuestions, splitParts } from './print.js?v=1.5.2';
+import { readStore, writeStore, uid, escapeHtml, el, showToast, readImageFile } from './core.js?v=1.5.3';
+import { generateWebapp, tweakWebapp, saveAiConfig, getAiConfig, MODEL_CHOICES, enhanceDiagram, colouriseDiagram } from './ai.js?v=1.5.3';
+import { openTouchUp } from './touchup.js?v=1.5.3';
+import { SYL_LOS, SYL_LO_BY_ID, SYL_LEVELS } from './syllabus.js?v=1.5.3';
+import { classifyBatch, needsClassify } from './classify.js?v=1.5.3';
+import { printQuestions, splitParts } from './print.js?v=1.5.3';
 
 const BLOCKS_KEY = 'vis_blocks';
 const MAX_BLOCKS = 200;
@@ -121,7 +121,7 @@ function cleanBlock(b) {
     topic: String(b.topic || '').slice(0, 80),
     losManual: !!b.losManual,
   };
-  // The cleaned picture as it was before any touch-up / colourise (v1.5.2),
+  // The cleaned picture as it was before any touch-up / colourise (v1.5.3),
   // so "Original" can put it back. Dropped when it is the same picture, or
   // when keeping it would push the block past what one cloud document holds.
   if (out.diagram && typeof b.diagramOriginal === 'string' && /^data:image\//.test(b.diagramOriginal) &&
