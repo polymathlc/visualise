@@ -10,7 +10,7 @@
 // SYSTEM_PROMPT and the reply cleaning below duplicate functions/prompt.js.
 // Keep them in step when editing either copy.
 
-import { readStore, writeStore, shrinkImageDataUrl } from './core.js?v=1.4.1';
+import { readStore, writeStore, shrinkImageDataUrl } from './core.js?v=1.5.0';
 
 export const AI_STORE_KEY = 'vis_ai';
 export const DEFAULT_PROXY_URL = 'https://us-central1-mathgen--app.cloudfunctions.net/visualiseAi';
@@ -807,6 +807,39 @@ export async function enhanceDiagram({ imageDataUrl, signal } = {}) {
     throw new AiError('The diagram clean-up did not return a picture.', { kind: 'format' });
   }
   return url;
+}
+
+/**
+ * Ask the proxy which learning objectives each question belongs to.
+ * questions: [{id, text}] (max 20); los: [{id, text, topic}].
+ * Resolves [{id, los: [loId]}]. Throws on any failure so the caller can fall
+ * back to a keyword match.
+ */
+export async function classifyQuestions({ questions, los, signal } = {}) {
+  const qs = (Array.isArray(questions) ? questions : []).slice(0, 20);
+  if (!qs.length) return [];
+  const proxyUrl = getAiConfig().proxyUrl || DEFAULT_PROXY_URL;
+  let response;
+  try {
+    response = await fetchWithTimeout(proxyUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'classify', questions: qs, los }),
+    }, REQUEST_TIMEOUT_MS, 'the AI server', signal, 'proxy-unreachable');
+  } catch (err) {
+    if (err instanceof AiError && err.kind === 'cancelled') throw cancelledError();
+    throw toPlainError(err);
+  }
+  const { data } = await readJson(response);
+  if (!response.ok || !data || data.ok === false) {
+    throw new AiError((data && data.error) || ('Sorting failed (' + response.status + ').'),
+      { status: response.status, kind: 'http' });
+  }
+  const result = data.result && typeof data.result === 'object' ? data.result : data;
+  const items = result && Array.isArray(result.items) ? result.items : null;
+  if (!items) throw new AiError('Sorting returned nothing.', { kind: 'format' });
+  return items.filter(it => it && typeof it.id === 'string')
+    .map(it => ({ id: it.id, los: Array.isArray(it.los) ? it.los.map(String) : [] }));
 }
 
 function cancelledError() {

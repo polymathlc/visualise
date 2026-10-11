@@ -10,8 +10,11 @@
 // box holds runs in <iframe sandbox="allow-scripts"> with srcdoc: an opaque
 // origin, so a generated app can never read this site's storage or DOM.
 
-import { readStore, writeStore, uid, escapeHtml, el, showToast, readImageFile } from './core.js?v=1.4.1';
-import { generateWebapp, tweakWebapp, saveAiConfig, getAiConfig, MODEL_CHOICES, enhanceDiagram } from './ai.js?v=1.4.1';
+import { readStore, writeStore, uid, escapeHtml, el, showToast, readImageFile } from './core.js?v=1.5.0';
+import { generateWebapp, tweakWebapp, saveAiConfig, getAiConfig, MODEL_CHOICES, enhanceDiagram } from './ai.js?v=1.5.0';
+import { SYL_LOS, SYL_LO_BY_ID, SYL_LEVELS } from './syllabus.js?v=1.5.0';
+import { classifyBatch, needsClassify } from './classify.js?v=1.5.0';
+import { printQuestions } from './print.js?v=1.5.0';
 
 const BLOCKS_KEY = 'vis_blocks';
 const MAX_BLOCKS = 200;
@@ -97,7 +100,7 @@ export function imageFiles(list) {
 function cleanBlock(b) {
   if (!b || typeof b !== 'object' || typeof b.id !== 'string') return null;
   if (typeof b.html !== 'string' || !b.html.trim()) return null;
-  return {
+  const out = {
     id: b.id,
     questionText: String(b.questionText || ''),
     type: b.type === 'mcq' ? 'mcq' : 'free',
@@ -111,7 +114,13 @@ function cleanBlock(b) {
     updatedAt: Number(b.updatedAt) || Number(b.createdAt) || 0,
     diagram: typeof b.diagram === 'string' && /^data:image\//.test(b.diagram) && b.diagram.length < MAX_DIAGRAM_CHARS
       ? b.diagram : '',
+    // Learning objectives (v1.5.0). `los` absent = not sorted yet; [] = sorted, none fit.
+    topic: String(b.topic || '').slice(0, 80),
+    losManual: !!b.losManual,
   };
+  // Never write an undefined field: Firestore refuses them.
+  if (Array.isArray(b.los)) out.los = b.los.map(String).filter(id => SYL_LO_BY_ID[id]).slice(0, 5);
+  return out;
 }
 
 function loadBlocks() {
@@ -509,7 +518,8 @@ function questionView(data) {
 }
 
 function parseLine(line, i) {
-  const m = String(line).match(/^\(?([1-4A-D])[).:]?\s*(.*)$/);
+  // A label needs a bracket or a separator after it: "2/3" is an answer, not option 2.
+  const m = String(line).match(/^\(([1-4A-D])\)\s*(.*)$/) || String(line).match(/^([1-4A-D])[).:]\s+(.*)$/);
   return m ? { label: m[1], text: m[2] || line } : { label: String(i + 1), text: String(line) };
 }
 
@@ -1075,6 +1085,63 @@ function answerCheck(block) {
   return wrap;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Learning objectives on a saved question (v1.5.0)
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Levels with P3 first: this board is for a P3 child. */
+const LEVEL_ORDER = ['P3'].concat(SYL_LEVELS.filter(l => l !== 'P3'));
+
+function loLabel(lo) { return lo.level + ' · ' + lo.code + ' ' + lo.text; }
+
+/** <option>s for every LO, grouped by level (P3 first), optionally only one topic. */
+function loOptions(select, topicKey) {
+  for (const lv of LEVEL_ORDER) {
+    const los = SYL_LOS.filter(lo => lo.level === lv && (!topicKey || lo.level + '|' + lo.sub === topicKey));
+    if (!los.length) continue;
+    const g = el('optgroup', { label: lv });
+    for (const lo of los) g.appendChild(el('option', { value: lo.id }, loLabel(lo)));
+    select.appendChild(g);
+  }
+}
+
+function loChips(board, block) {
+  const wrap = el('div', { class: 'board-los', 'data-los-for': block.id });
+  fillChips(board, wrap, block);
+  return wrap;
+}
+
+function fillChips(board, wrap, block) {
+  wrap.innerHTML = '';
+  const los = Array.isArray(block.los) ? block.los.map(id => SYL_LO_BY_ID[id]).filter(Boolean) : null;
+  if (los === null) wrap.appendChild(el('span', { class: 'board-lo board-lo-wait' }, 'Sorting…'));
+  else if (!los.length) wrap.appendChild(el('span', { class: 'board-lo board-lo-none' }, 'No learning objective'));
+  for (const lo of los || []) {
+    wrap.appendChild(el('span', { class: 'board-lo', title: lo.strand + ' › ' + lo.sub + ' › ' + lo.topic },
+      lo.level + ' · ' + lo.sub + ' · ' + lo.code + ' ' + lo.text));
+  }
+  const change = el('button', { type: 'button', class: 'board-lo-change' }, 'change');
+  change.addEventListener('click', () => {
+    const sel = el('select', { class: 'board-lo-select', 'aria-label': 'Learning objective' });
+    sel.appendChild(el('option', { value: '' }, '— none —'));
+    loOptions(sel);
+    sel.value = los && los[0] ? los[0].id : '';
+    change.replaceWith(sel);
+    sel.focus();
+    sel.addEventListener('change', () => board.setLos(block.id, sel.value ? [sel.value] : []));
+    sel.addEventListener('blur', () => { if (sel.isConnected) sel.replaceWith(change); });
+  });
+  wrap.appendChild(change);
+}
+
+/** What a saved question prints as. */
+function printItem(block, num) {
+  const options = block.type === 'mcq'
+    ? (block.options && block.options.length ? block.options.map(parseLine) : parseOptions(block.questionText))
+    : [];
+  return { num, type: block.type, stem: stemOf(block.questionText, options), options, diagram: block.diagram };
+}
+
 function createSavedBox(board, block, index) {
   const box = el('section', { class: 'board-box board-box-saved', 'data-id': block.id,
     'aria-label': 'Question ' + (index + 1) });
@@ -1085,8 +1152,12 @@ function createSavedBox(board, block, index) {
     title: 'Delete' }, '🗑');
   tools.append(editBtn, delBtn);
   box.appendChild(tools);
-  box.appendChild(el('div', { class: 'board-num' }, String(index + 1)));
+  const pick = el('input', { type: 'checkbox', class: 'board-pick', 'aria-label': 'Choose question ' + (index + 1) });
+  pick.checked = board.isSelected(block.id);
+  pick.addEventListener('change', () => board.select(block.id, pick.checked));
+  box.appendChild(el('label', { class: 'board-num' }, [pick, el('span', {}, String(index + 1))]));
   box.appendChild(questionView(block));
+  box.appendChild(loChips(board, block));
   box.appendChild(answerCheck(block));
   // The app starts hidden. It is only built the first time it is shown, so a long
   // board does not load every app at once; hiding it again keeps its state.
@@ -1129,6 +1200,12 @@ export function initBoard({ listEl, addBtn, emptyEl }) {
   const blankCountEl = document.getElementById('blankCount');
   const addBlanksBtn = document.getElementById('addBlanks');
 
+  // v1.5.0: which saved questions are ticked (in memory only), and the filter.
+  const selected = new Set();
+  const filter = { topic: '', lo: '' };
+  const tb = buildToolbar();
+  listEl.before(tb.root);
+
   const entryFor = box => editors.find(e => e.editor && e.editor.box === box);
   const removeEntry = box => { editors = editors.filter(e => !(e.editor && e.editor.box === box)); };
 
@@ -1142,8 +1219,27 @@ export function initBoard({ listEl, addBtn, emptyEl }) {
   const idleEmpty = () => editors.filter(e => !e.existing && e.editor && e.editor.isEmpty());
 
   const board = {
+    isSelected(id) { return selected.has(id); },
+    select(id, on) { if (on) selected.add(id); else selected.delete(id); updateToolbar(); },
+    /** The parent picked an objective by hand: it is never overwritten by auto-sorting. */
+    setLos(id, los) {
+      const i = blocks.findIndex(b => b.id === id);
+      if (i < 0) return;
+      const lo = SYL_LO_BY_ID[los[0]];
+      const next = blocks.slice();
+      next[i] = cleanBlock({ ...blocks[i], los, topic: lo ? lo.sub : '', losManual: true, updatedAt: Date.now() });
+      if (!saveBlocks(next)) return;
+      blocks = next;
+      refreshChips(next[i]);
+      applyFilter();
+    },
     commit(block, editorBox) {
       if (!block) return;
+      const old = blocks.find(b => b.id === block.id);
+      // Changed wording: sort it again (unless the parent chose its objective).
+      if (old && old.questionText !== block.questionText && !block.losManual) {
+        block = { ...block }; delete block.los; block.topic = '';
+      }
       const i = blocks.findIndex(b => b.id === block.id);
       const next = blocks.slice();
       if (i >= 0) next[i] = block; else next.push(block);
@@ -1154,6 +1250,7 @@ export function initBoard({ listEl, addBtn, emptyEl }) {
       showToast('Saved.', 'success');
       const saved = listEl.querySelector('[data-id="' + CSS.escape(block.id) + '"]');
       if (saved && editorBox) saved.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      sortPending();
     },
     closeEditor(box) {
       removeEntry(box);
@@ -1181,6 +1278,7 @@ export function initBoard({ listEl, addBtn, emptyEl }) {
       editors = editors.filter(e => !e.existing || blocks.some(b => b.id === e.existing.id) ||
         (e.editor && e.editor.isBusy()));
       render();
+      sortPending();
     },
     /** Something in a box changed (building, waiting, ready): refresh the bar. */
     changed() { updateBatch(); },
@@ -1239,6 +1337,140 @@ export function initBoard({ listEl, addBtn, emptyEl }) {
     });
     emptyEl.hidden = blocks.length > 0 || editors.length > 0;
     updateBatch();
+    applyFilter();
+  }
+
+  // ── Toolbar: select, print, filter (v1.5.0) ──
+  function buildToolbar() {
+    const root = el('div', { class: 'board-toolbar' });
+    const allBtn = el('button', { type: 'button', class: 'board-tb-btn' }, 'Select all');
+    const clearBtn = el('button', { type: 'button', class: 'board-tb-btn' }, 'Clear');
+    const count = el('span', { class: 'board-tb-count' });
+    const printBtn = el('button', { type: 'button', class: 'board-tb-btn board-tb-print' }, '🖨 Print selected questions');
+    const filterBtn = el('button', { type: 'button', class: 'board-tb-btn', 'aria-expanded': 'false' }, '🔎 Filter');
+    const status = el('span', { class: 'board-tb-status', hidden: '' });
+    const panel = el('div', { class: 'board-filter', hidden: '' });
+    const topicSel = el('select', { 'aria-label': 'Topic' });
+    const loSel = el('select', { 'aria-label': 'Learning objective' });
+    const clearFilter = el('button', { type: 'button', class: 'board-tb-btn' }, 'Clear filter');
+    topicSel.append(el('option', { value: '' }, 'All topics'), el('option', { value: '__none' }, 'Not sorted / no objective'));
+    for (const lv of LEVEL_ORDER) {
+      const subs = [...new Set(SYL_LOS.filter(lo => lo.level === lv).map(lo => lo.sub))];
+      const g = el('optgroup', { label: lv });
+      for (const sub of subs) g.appendChild(el('option', { value: lv + '|' + sub }, lv + ' · ' + sub));
+      topicSel.appendChild(g);
+    }
+    const fillLo = () => {
+      loSel.innerHTML = '';
+      loSel.appendChild(el('option', { value: '' }, 'All learning objectives'));
+      if (filter.topic !== '__none') loOptions(loSel, filter.topic);
+      loSel.value = filter.lo;
+      loSel.disabled = filter.topic === '__none';
+    };
+    fillLo();
+    panel.append(el('label', {}, ['Topic ', topicSel]), el('label', {}, ['Learning objective ', loSel]), clearFilter);
+    root.append(el('div', { class: 'board-tb-row' }, [allBtn, clearBtn, count, printBtn, filterBtn, status]), panel);
+
+    allBtn.addEventListener('click', () => {
+      visibleBlocks().forEach(b => selected.add(b.id));
+      syncTicks(); updateToolbar();
+    });
+    clearBtn.addEventListener('click', () => { selected.clear(); syncTicks(); updateToolbar(); });
+    printBtn.addEventListener('click', printSelected);
+    filterBtn.addEventListener('click', () => {
+      panel.hidden = !panel.hidden;
+      filterBtn.setAttribute('aria-expanded', String(!panel.hidden));
+    });
+    topicSel.addEventListener('change', () => { filter.topic = topicSel.value; filter.lo = ''; fillLo(); applyFilter(); });
+    loSel.addEventListener('change', () => { filter.lo = loSel.value; applyFilter(); });
+    clearFilter.addEventListener('click', () => {
+      filter.topic = ''; filter.lo = ''; topicSel.value = ''; fillLo(); applyFilter();
+    });
+    return { root, count, printBtn, filterBtn, status, allBtn, clearBtn };
+  }
+
+  function matches(b) {
+    const los = Array.isArray(b.los) ? b.los.map(id => SYL_LO_BY_ID[id]).filter(Boolean) : [];
+    if (filter.topic === '__none') return !los.length;
+    if (filter.topic && !los.some(lo => lo.level + '|' + lo.sub === filter.topic)) return false;
+    if (filter.lo && !los.some(lo => lo.id === filter.lo)) return false;
+    return true;
+  }
+  const visibleBlocks = () => blocks.filter(matches);
+
+  function applyFilter() {
+    for (const box of listEl.querySelectorAll('.board-box-saved')) {
+      const b = blocks.find(x => x.id === box.dataset.id);
+      box.hidden = !!b && !matches(b);
+    }
+    const n = (filter.topic ? 1 : 0) + (filter.lo ? 1 : 0);
+    tb.filterBtn.textContent = n ? '🔎 Filter (' + n + ') · ' + visibleBlocks().length + ' shown' : '🔎 Filter';
+    updateToolbar();
+  }
+
+  function syncTicks() {
+    for (const box of listEl.querySelectorAll('.board-box-saved')) {
+      const t = box.querySelector('.board-pick');
+      if (t) t.checked = selected.has(box.dataset.id);
+    }
+  }
+
+  function updateToolbar() {
+    for (const id of [...selected]) if (!blocks.some(b => b.id === id)) selected.delete(id);
+    tb.count.textContent = selected.size ? selected.size + ' chosen' : '';
+    tb.printBtn.disabled = !selected.size;
+    tb.root.hidden = !blocks.length;
+  }
+
+  async function printSelected() {
+    const chosen = blocks.filter(b => selected.has(b.id));
+    if (!chosen.length) return;
+    tb.printBtn.disabled = true;
+    try {
+      await printQuestions(chosen.map((b, i) => printItem(b, i + 1)));
+    } catch (err) {
+      console.error(err);
+      showToast('Could not make the printout.', 'error');
+    } finally { updateToolbar(); }
+  }
+
+  // ── Auto-sorting into learning objectives (v1.5.0) ──
+  let sorting = false;
+  function refreshChips(block) {
+    const wrap = listEl.querySelector('[data-los-for="' + CSS.escape(block.id) + '"]');
+    if (wrap) fillChips(board, wrap, block);
+  }
+
+  async function sortPending() {
+    if (sorting) return;
+    sorting = true;
+    let tries = 0;
+    try {
+      while (tries++ < 20) {
+        const todo = blocks.filter(needsClassify).slice(0, 20);
+        if (!todo.length) break;
+        tb.status.hidden = false;
+        tb.status.textContent = 'Sorting questions into learning objectives…';
+        const snap = new Map(todo.map(b => [b.id, b.questionText]));
+        const result = await classifyBatch(todo);
+        const next = blocks.slice();
+        const changed = [];
+        next.forEach((b, i) => {
+          if (!result.has(b.id) || b.losManual || snap.get(b.id) !== b.questionText) return;
+          const los = result.get(b.id);
+          const lo = SYL_LO_BY_ID[los[0]];
+          next[i] = cleanBlock({ ...b, los, topic: lo ? lo.sub : '', updatedAt: Date.now() });
+          changed.push(next[i]);
+        });
+        if (!changed.length || !saveBlocks(next)) break;
+        blocks = next;
+        changed.forEach(refreshChips);
+        applyFilter();
+      }
+    } finally {
+      sorting = false;
+      tb.status.hidden = true;
+    }
   }
 
   function readyEditors() {
@@ -1284,6 +1516,7 @@ export function initBoard({ listEl, addBtn, emptyEl }) {
     blocks = next;
     done.forEach(removeEntry);
     render();
+    sortPending();
     showToast('Saved ' + done.length + ' question' + (done.length === 1 ? '' : 's') + '.' +
       (skipped ? ' ' + skipped + ' still need a question typed in.' : ''), 'success');
   }
@@ -1332,5 +1565,6 @@ export function initBoard({ listEl, addBtn, emptyEl }) {
   });
 
   render();
+  sortPending();
   return board;
 }
