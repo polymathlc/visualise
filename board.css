@@ -474,3 +474,35 @@
   .board-diagram { max-height: 90mm; break-inside: avoid; }
   .board-box { box-shadow: none; break-inside: avoid; }
 }
+
+/* ---- v1.5.0: select, print and filter saved questions ---- */
+.board-num { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.board-pick { appearance: auto; -webkit-appearance: auto; width: 16px; height: 16px; margin: 0; cursor: pointer; accent-color: var(--accent-strong); }
+.board-toolbar {
+  margin: 0 0 var(--space-md, 16px);
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.board-tb-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.board-tb-btn {
+  padding: 6px 12px; border-radius: 999px; cursor: pointer; font: inherit; font-size: .88rem; font-weight: 600;
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+}
+.board-tb-btn:hover:not(:disabled) { background: var(--accent-wash); }
+.board-tb-btn:disabled { opacity: .45; cursor: not-allowed; }
+.board-tb-print:not(:disabled) { background: var(--accent-strong); border-color: var(--accent-ink); color: #fff; }
+.board-tb-count, .board-tb-status { font-size: .85rem; color: var(--text-muted); }
+.board-tb-status { margin-left: auto; }
+.board-filter { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin-top: 12px; }
+.board-filter[hidden] { display: none; }
+.board-filter label { display: flex; flex-direction: column; gap: 4px; font-size: .8rem; font-weight: 600; color: var(--text-muted); }
+.board-filter select { max-width: 340px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: inherit; font-size: .88rem; }
+.board-los { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; }
+.board-lo, .board-lo-wait, .board-lo-none {
+  font-size: .78rem; padding: 3px 10px; border-radius: 999px; background: var(--accent-wash); color: var(--accent-ink);
+}
+.board-lo-wait, .board-lo-none { background: transparent; border: 1px dashed var(--border-strong); color: var(--text-muted); }
+.board-lo-change { font: inherit; font-size: .78rem; background: none; border: 0; color: var(--accent-ink); text-decoration: underline; cursor: pointer; padding: 0 4px; }
+.board-lo-select { max-width: 320px; font: inherit; font-size: .8rem; padding: 4px; border-radius: 8px; border: 1px solid var(--border-strong); }
