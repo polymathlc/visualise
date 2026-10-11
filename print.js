@@ -15,17 +15,25 @@ function esc(s) {
 
 /**
  * Split a question into its stem and parts (a), (b), (c)…
- * A part marker is "(a)" or "a)" at the start of a line or after a space,
- * and the letters must run a, b, c… in order (at least two of them).
+ * "(a)" may sit anywhere after a space; a bare "a)" or "a." must start a line
+ * or follow the end of a sentence. Letters are LOWERCASE and must run a, b, c…
+ * in order, at least two of them — so "E. coli", an "(A) (B) (C)" option list
+ * and a roman "(i) (ii)" are never split. Render-time only; text is not changed.
  */
 export function splitParts(text) {
   const s = String(text || '');
-  const re = /(^|\s)\(?([a-h])\)\s+/g;
+  const re = /(^|\s)(?:\(([a-h])\)|([a-h])[.)])(?=\s)/g;
   const marks = [];
   let m; let want = 'a';
   while ((m = re.exec(s))) {
-    if (m[2] !== want) continue;
-    marks.push({ letter: m[2], at: m.index + m[1].length, body: m.index + m[0].length });
+    const letter = m[2] || m[3];
+    if (letter !== want) continue;
+    const start = m.index + m[1].length;
+    if (m[3]) {
+      const before = s.slice(0, start).replace(/[ \t]+$/, '');
+      if (before && !/[\n.?!:]$/.test(before)) continue;
+    }
+    marks.push({ letter, at: start, body: m.index + m[0].length });
     want = String.fromCharCode(want.charCodeAt(0) + 1);
   }
   if (marks.length < 2) return { stem: s.trim(), parts: [] };

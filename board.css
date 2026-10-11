@@ -506,3 +506,13 @@
 .board-lo-wait, .board-lo-none { background: transparent; border: 1px dashed var(--border-strong); color: var(--text-muted); }
 .board-lo-change { font: inherit; font-size: .78rem; background: none; border: 0; color: var(--accent-ink); text-decoration: underline; cursor: pointer; padding: 0 4px; }
 .board-lo-select { max-width: 320px; font: inherit; font-size: .8rem; padding: 4px; border-radius: 8px; border: 1px solid var(--border-strong); }
+
+/* Touch up / Colourise / Original under a diagram (v1.5.2). */
+.board-diagram-tools { margin-top: 10px; }
+.board-box-saved .board-diagram-tools { margin: 4px 0 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+@media print { .board-diagram-tools { display: none; } }
+
+/* Question parts (a) (b) (c): each on its own line, hanging indent. */
+.board-part { display: flex; gap: 10px; margin: 10px 0 0; align-items: baseline; }
+.board-part-label { flex: 0 0 2.2em; font-weight: 700; }
+.board-part-text { flex: 1; min-width: 0; white-space: pre-wrap; }
