@@ -10,7 +10,7 @@
 // SYSTEM_PROMPT and the reply cleaning below duplicate functions/prompt.js.
 // Keep them in step when editing either copy.
 
-import { readStore, writeStore, shrinkImageDataUrl } from './core.js?v=1.5.1';
+import { readStore, writeStore, shrinkImageDataUrl } from './core.js?v=1.5.2';
 
 export const AI_STORE_KEY = 'vis_ai';
 export const DEFAULT_PROXY_URL = 'https://us-central1-mathgen--app.cloudfunctions.net/visualiseAi';
@@ -805,6 +805,40 @@ export async function enhanceDiagram({ imageDataUrl, signal } = {}) {
   const url = result && result.imageDataUrl;
   if (typeof url !== 'string' || !/^data:image\//.test(url)) {
     throw new AiError('The diagram clean-up did not return a picture.', { kind: 'format' });
+  }
+  return url;
+}
+
+/**
+ * Ask the proxy to redraw a diagram in colour. Same contract as
+ * enhanceDiagram: resolves a data URL, throws on any failure.
+ */
+export async function colouriseDiagram({ imageDataUrl, signal } = {}) {
+  if (typeof imageDataUrl !== 'string' || !/^data:image\//.test(imageDataUrl)) {
+    throw new AiError('There is no picture to colourise.', { kind: 'input' });
+  }
+  const proxyUrl = getAiConfig().proxyUrl || DEFAULT_PROXY_URL;
+  let response;
+  try {
+    response = await fetchWithTimeout(proxyUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'colour', imageDataUrl }),
+    }, ENHANCE_TIMEOUT_MS, 'the AI server', signal, 'proxy-unreachable');
+  } catch (err) {
+    if (err instanceof AiError && err.kind === 'cancelled') throw cancelledError();
+    throw toPlainError(err);
+  }
+  const { data } = await readJson(response);
+  if (!response.ok || !data || data.ok === false) {
+    const serverMsg = data && typeof data.error === 'string' ? data.error : '';
+    throw new AiError(serverMsg || ('Colourising the diagram failed (' + response.status + ').'),
+      { status: response.status, kind: 'http' });
+  }
+  const result = data.result && typeof data.result === 'object' ? data.result : data;
+  const url = result && result.imageDataUrl;
+  if (typeof url !== 'string' || !/^data:image\//.test(url)) {
+    throw new AiError('Colourising did not return a picture.', { kind: 'format' });
   }
   return url;
 }

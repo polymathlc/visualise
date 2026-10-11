@@ -10,15 +10,18 @@
 // box holds runs in <iframe sandbox="allow-scripts"> with srcdoc: an opaque
 // origin, so a generated app can never read this site's storage or DOM.
 
-import { readStore, writeStore, uid, escapeHtml, el, showToast, readImageFile } from './core.js?v=1.5.1';
-import { generateWebapp, tweakWebapp, saveAiConfig, getAiConfig, MODEL_CHOICES, enhanceDiagram } from './ai.js?v=1.5.1';
-import { SYL_LOS, SYL_LO_BY_ID, SYL_LEVELS } from './syllabus.js?v=1.5.1';
-import { classifyBatch, needsClassify } from './classify.js?v=1.5.1';
-import { printQuestions } from './print.js?v=1.5.1';
+import { readStore, writeStore, uid, escapeHtml, el, showToast, readImageFile } from './core.js?v=1.5.2';
+import { generateWebapp, tweakWebapp, saveAiConfig, getAiConfig, MODEL_CHOICES, enhanceDiagram, colouriseDiagram } from './ai.js?v=1.5.2';
+import { openTouchUp } from './touchup.js?v=1.5.2';
+import { SYL_LOS, SYL_LO_BY_ID, SYL_LEVELS } from './syllabus.js?v=1.5.2';
+import { classifyBatch, needsClassify } from './classify.js?v=1.5.2';
+import { printQuestions, splitParts } from './print.js?v=1.5.2';
 
 const BLOCKS_KEY = 'vis_blocks';
 const MAX_BLOCKS = 200;
 const MAX_DIAGRAM_CHARS = 700000;
+// A block is one Firestore document (1 MiB); keep the html and both pictures under this.
+const MAX_BLOCK_PICTURE_CHARS = 950000;
 const KEY_ERROR_CODES = new Set(['no-key', 'proxy-unreachable', 'bad-key']);
 // Luna is quick and cheap; Sol 6.1 thinks harder for tricky questions.
 const DEFAULT_MODEL = 'gpt-6-luna';
@@ -118,6 +121,14 @@ function cleanBlock(b) {
     topic: String(b.topic || '').slice(0, 80),
     losManual: !!b.losManual,
   };
+  // The cleaned picture as it was before any touch-up / colourise (v1.5.2),
+  // so "Original" can put it back. Dropped when it is the same picture, or
+  // when keeping it would push the block past what one cloud document holds.
+  if (out.diagram && typeof b.diagramOriginal === 'string' && /^data:image\//.test(b.diagramOriginal) &&
+      b.diagramOriginal !== out.diagram && b.diagramOriginal.length < MAX_DIAGRAM_CHARS &&
+      out.html.length + out.diagram.length + b.diagramOriginal.length < MAX_BLOCK_PICTURE_CHARS) {
+    out.diagramOriginal = b.diagramOriginal;
+  }
   // Never write an undefined field: Firestore refuses them.
   if (Array.isArray(b.los)) out.los = b.los.map(String).filter(id => SYL_LO_BY_ID[id]).slice(0, 5);
   return out;
@@ -413,6 +424,79 @@ async function cleanUpDiagram(cropUrl, signal) {
   }
 }
 
+/**
+ * Put a new picture on a block (or editor draft). The first time the picture
+ * is changed, the cleaned black-and-white one is kept as `diagramOriginal`
+ * (never overwritten after that) so "Original" can bring it back. If the app's
+ * html happens to embed the old picture, it is swapped for the new one too.
+ */
+function applyDiagram(d, url, { restore = false } = {}) {
+  const old = d.diagram || '';
+  if (!old || !url || old === url) return;
+  if (!restore && !d.diagramOriginal) d.diagramOriginal = old;
+  if (typeof d.html === 'string' && old.length > 64 && d.html.includes(old)) d.html = d.html.split(old).join(url);
+  d.diagram = url;
+  if (restore) d.diagramOriginal = '';
+}
+
+/**
+ * The ✏️ Touch up / 🎨 Colourise / ↩ Original row under a diagram.
+ * opts: get() -> the block/draft, apply(url, {restore}), begin(text) -> AbortController|null,
+ * alive(c), end(c), report(text, kind).
+ */
+function diagramTools(opts) {
+  const row = el('div', { class: 'board-diagram-row board-diagram-tools' });
+  const touchBtn = el('button', { type: 'button', class: 'board-btn' }, '✏️ Touch up');
+  const colourBtn = el('button', { type: 'button', class: 'board-btn' }, '🎨 Colourise');
+  touchBtn.addEventListener('click', async () => {
+    const d = opts.get();
+    if (!d || !d.diagram) return;
+    let out = null;
+    try { out = await openTouchUp(d.diagram, { title: 'Touch up the diagram' }); }
+    catch (_) { opts.report('Could not open the picture editor.', 'error'); return; }
+    if (!out) return;
+    try {
+      opts.apply(await finishDiagram(out), {});
+      opts.report('Diagram touched up.', 'ok');
+    } catch (_) { opts.report('Could not keep that picture. The old one is still there.', 'error'); }
+  });
+  colourBtn.addEventListener('click', async () => {
+    const d = opts.get();
+    if (!d || !d.diagram) return;
+    const c = opts.begin('Colourising the diagram…');
+    if (!c) return;
+    try {
+      const url = await colouriseDiagram({ imageDataUrl: d.diagramOriginal || d.diagram, signal: c.signal });
+      if (!opts.alive(c)) return;
+      const done = await finishDiagram(url);
+      opts.end(c);
+      opts.apply(done, {});
+      opts.report('Diagram colourised.', 'ok');
+    } catch (err) {
+      if (!opts.alive(c)) return;
+      opts.end(c);
+      opts.report(err && err.cancelled ? 'Stopped.'
+        : 'Could not colourise the diagram' + (err && err.message ? ' (' + err.message + ')' : '') + '. The old picture is still there.',
+        err && err.cancelled ? '' : 'error');
+    } finally {
+      opts.end(c);
+    }
+  });
+  row.append(touchBtn, colourBtn);
+  const d0 = opts.get();
+  if (d0 && d0.diagramOriginal && d0.diagramOriginal !== d0.diagram) {
+    const origBtn = el('button', { type: 'button', class: 'board-btn board-btn-quiet' }, '↩ Original');
+    origBtn.addEventListener('click', () => {
+      const d = opts.get();
+      if (!d || !d.diagramOriginal) return;
+      opts.apply(d.diagramOriginal, { restore: true });
+      opts.report('The original diagram is back.', 'ok');
+    });
+    row.appendChild(origBtn);
+  }
+  return row;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // The sandboxed app
 // ─────────────────────────────────────────────────────────────────────────
@@ -522,9 +606,15 @@ function questionView(data) {
     ? (data.options && data.options.length ? data.options.map(parseLine) : parseOptions(data.questionText))
     : [];
   const wrap = el('div', { class: 'board-question' });
-  const stem = stemOf(data.questionText, options);
-  for (const para of String(stem).split(/\n{2,}/)) {
+  const split = splitParts(stemOf(data.questionText, options));
+  for (const para of String(split.stem).split(/\n{2,}/)) {
     if (para.trim()) wrap.appendChild(el('p', { class: 'board-stem' }, para.trim()));
+  }
+  for (const p of split.parts) {
+    wrap.appendChild(el('div', { class: 'board-part' }, [
+      el('span', { class: 'board-part-label' }, p.label),
+      el('span', { class: 'board-part-text' }, p.text),
+    ]));
   }
   if (data.diagram) wrap.appendChild(el('img', { class: 'board-diagram', src: data.diagram, alt: 'Diagram' }));
   if (options.length) {
@@ -730,13 +820,14 @@ function createEditor(board, existing) {
       if (!f) return;
       try {
         d.diagram = await finishDiagram(await readImageFile(f));
+        d.diagramOriginal = '';
         showResult();
       } catch (_) { setStatus('Could not read that picture.', 'error'); }
     });
     row.append(replaceBtn, file);
     if (d.diagram) {
       const removeBtn = el('button', { type: 'button', class: 'board-btn board-btn-quiet' }, 'Remove diagram');
-      removeBtn.addEventListener('click', () => { d.diagram = ''; showResult(); });
+      removeBtn.addEventListener('click', () => { d.diagram = ''; d.diagramOriginal = ''; showResult(); });
       const againBtn = el('button', { type: 'button', class: 'board-btn' }, 'Clean up again');
       againBtn.addEventListener('click', async () => {
         if (state.building) return;
@@ -748,6 +839,7 @@ function createEditor(board, existing) {
           const out = await cleanUpDiagram(d.diagram, controller.signal);
           if (state.controller !== controller) return;
           d.diagram = out.url;
+          d.diagramOriginal = '';
           setStatus(out.quick ? 'The AI clean-up was not available, so a quick clean-up was used.' : 'Diagram cleaned up.',
             out.quick ? 'warn' : 'ok');
           showResult();
@@ -761,6 +853,23 @@ function createEditor(board, existing) {
       row.append(againBtn, removeBtn);
     }
     sec.appendChild(row);
+    if (d.diagram) {
+      sec.appendChild(diagramTools({
+        get: () => d,
+        apply: (url, opts) => { applyDiagram(d, url, opts); showResult(); },
+        begin: (text) => {
+          if (state.building) return null;
+          setBuilding(true);
+          setStatus(text, 'busy');
+          const c = new AbortController();
+          state.controller = c;
+          return c;
+        },
+        alive: (c) => state.controller === c,
+        end: (c) => { if (state.controller === c) { state.controller = null; setBuilding(false); } },
+        report: (text, kind) => setStatus(text, kind),
+      }));
+    }
     return sec;
   }
 
@@ -1180,6 +1289,30 @@ function createSavedBox(board, block, index) {
   pick.addEventListener('change', () => board.select(block.id, pick.checked));
   box.appendChild(el('label', { class: 'board-num' }, [pick, el('span', {}, String(index + 1))]));
   box.appendChild(questionView(block));
+  if (block.diagram) {
+    let busy = null;
+    const tools = diagramTools({
+      get: () => board.getBlock(block.id),
+      apply: (url, opts) => board.setDiagram(block.id, url, opts),
+      begin: (text) => {
+        if (busy) return null;
+        busy = new AbortController();
+        tools.querySelectorAll('button').forEach(n => { n.disabled = true; });
+        showToast(text, 'info');
+        return busy;
+      },
+      alive: (c) => busy === c,
+      end: (c) => {
+        if (busy !== c) return;
+        busy = null;
+        tools.querySelectorAll('button').forEach(n => { n.disabled = false; });
+      },
+      report: (text, kind) => {
+        if (text) showToast(text, kind === 'ok' ? 'success' : kind === 'error' ? 'error' : 'info');
+      },
+    });
+    box.appendChild(tools);
+  }
   box.appendChild(loChips(board, block));
   box.appendChild(answerCheck(block));
   // The app starts hidden. It is only built the first time it is shown, so a long
@@ -1255,6 +1388,22 @@ export function initBoard({ listEl, addBtn, emptyEl }) {
       blocks = next;
       refreshChips(next[i]);
       applyFilter();
+    },
+    getBlock(id) { return blocks.find(b => b.id === id) || null; },
+    /** A saved question's diagram was touched up, colourised or put back. */
+    setDiagram(id, url, opts) {
+      const i = blocks.findIndex(b => b.id === id);
+      if (i < 0) return;
+      const draft = { ...blocks[i] };
+      applyDiagram(draft, url, opts);
+      draft.updatedAt = Date.now();
+      const nextBlock = cleanBlock(draft);
+      if (!nextBlock) return;
+      const next = blocks.slice();
+      next[i] = nextBlock;
+      if (!saveBlocks(next)) return;
+      blocks = next;
+      render();
     },
     commit(block, editorBox) {
       if (!block) return;

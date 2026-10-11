@@ -31,7 +31,7 @@ import {
   pick,
   shuffle,
   formatNumber,
-} from './core.js?v=1.5.1';
+} from './core.js?v=1.5.2';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Topics

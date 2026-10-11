@@ -1,0 +1,48 @@
+/* Touch up: the full-screen picture editor (touchup.js). */
+.tu-root { position: fixed; inset: 0; z-index: 1000; background: rgba(20, 20, 20, 0.55);
+  display: flex; align-items: center; justify-content: center; padding: 16px; }
+.tu-panel { background: var(--surface, #fff); color: var(--text, #1a1a1a); border-radius: 18px;
+  box-shadow: 0 18px 60px rgba(0,0,0,0.25); width: min(1200px, 100%); height: min(900px, 100%);
+  display: flex; flex-direction: column; gap: 12px; padding: 18px 20px; box-sizing: border-box; }
+.tu-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.tu-title { margin: 0; font-size: 1.15rem; font-weight: 600; }
+.tu-bar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center;
+  padding: 10px 12px; background: var(--surface-soft, #f7f7f5); border-radius: 14px; }
+.tu-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tu-group[hidden], .tu-field[hidden] { display: none; }
+.tu-tool, .tu-btn { appearance: none; border: 1px solid var(--border-strong, #dcdcdc); background: #fff;
+  color: var(--text, #1a1a1a); border-radius: 10px; padding: 7px 10px; font: inherit; font-size: 0.9rem;
+  min-height: 38px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.tu-tool:hover, .tu-btn:hover:not(:disabled) { background: var(--accent-wash, #f1f8f1); }
+.tu-tool.is-on { background: var(--accent, #c8e6c9); border-color: var(--accent-strong, #a5d6a7);
+  color: var(--accent-ink, #1b5e20); font-weight: 600; }
+.tu-btn:disabled { opacity: 0.4; cursor: default; }
+.tu-btn.tu-primary { background: var(--accent-ink, #1b5e20); color: #fff; border-color: transparent; font-weight: 600; padding: 7px 16px; }
+.tu-btn.tu-primary:hover { background: #154a19; }
+.tu-btn.tu-quiet { background: transparent; }
+.tu-tool:focus-visible, .tu-btn:focus-visible { outline: 2px solid var(--blue-ink, #0d47a1); outline-offset: 2px; }
+.tu-field { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--text-soft, #4a4a4a); }
+.tu-lbl { font-weight: 500; }
+.tu-range { width: 110px; appearance: auto; -webkit-appearance: auto; }
+.tu-color { width: 38px; height: 30px; border: 1px solid var(--border-strong, #dcdcdc); border-radius: 8px; padding: 1px; background: #fff; }
+.tu-val { min-width: 3.2em; font-variant-numeric: tabular-nums; font-size: 0.85rem; color: var(--text-soft, #4a4a4a); text-align: center; }
+.tu-view { position: relative; flex: 1; min-height: 0; overflow: auto; border-radius: 14px;
+  background-color: #e9e9e6; background-image: linear-gradient(45deg, #dedede 25%, transparent 25%, transparent 75%, #dedede 75%),
+  linear-gradient(45deg, #dedede 25%, transparent 25%, transparent 75%, #dedede 75%);
+  background-size: 20px 20px; background-position: 0 0, 10px 10px; touch-action: none; outline: none;
+  display: grid; place-items: center; padding: 20px; box-sizing: border-box; }
+.tu-stage { position: relative; box-shadow: 0 2px 12px rgba(0,0,0,0.15); background: #fff; }
+.tu-canvas, .tu-overlay { position: absolute; left: 0; top: 0; image-rendering: auto; }
+.tu-overlay { pointer-events: none; }
+.tu-ring { position: absolute; pointer-events: none; border-radius: 50%; border: 1.5px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.75); box-sizing: border-box; }
+.tu-ring[hidden] { display: none; }
+.tu-text { position: absolute; z-index: 2; min-width: 140px; border: 1.5px dashed var(--blue-ink, #0d47a1);
+  background: rgba(255,255,255,0.9); padding: 2px 6px; border-radius: 6px; font-family: "Century Gothic", system-ui, sans-serif; font-weight: 600; }
+.tu-hint { margin: 0; font-size: 0.82rem; color: var(--text-muted, #8a8a8a); line-height: 1.5; }
+@media (max-width: 640px) {
+  .tu-root { padding: 0; }
+  .tu-panel { border-radius: 0; padding: 12px; height: 100%; }
+  .tu-tool-txt { display: none; }
+}
+@media print { .tu-root { display: none; } }
