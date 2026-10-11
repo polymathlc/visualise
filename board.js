@@ -10,8 +10,8 @@
 // box holds runs in <iframe sandbox="allow-scripts"> with srcdoc: an opaque
 // origin, so a generated app can never read this site's storage or DOM.
 
-import { readStore, writeStore, uid, escapeHtml, el, showToast, readImageFile } from './core.js?v=1.3.0';
-import { generateWebapp, tweakWebapp, saveAiConfig, getAiConfig, MODEL_CHOICES, enhanceDiagram } from './ai.js?v=1.3.0';
+import { readStore, writeStore, uid, escapeHtml, el, showToast, readImageFile } from './core.js?v=1.4.0';
+import { generateWebapp, tweakWebapp, saveAiConfig, getAiConfig, MODEL_CHOICES, enhanceDiagram } from './ai.js?v=1.4.0';
 
 const BLOCKS_KEY = 'vis_blocks';
 const MAX_BLOCKS = 200;
@@ -28,6 +28,67 @@ function modelLabel(m) {
 const FRAME_MIN = 220;
 const FRAME_MAX = 1600;
 const FRAME_START = 460;
+
+// ─────────────────────────────────────────────────────────────────────────
+// Building several boxes at once
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Many pictures can be added at once and every box builds by itself. To keep
+// the AI server's rate limit happy, at most MAX_PARALLEL boxes talk to the AI
+// at the same moment; the rest wait their turn in the order they were added
+// and start the instant a slot frees up. A box that is stopped while waiting
+// leaves the queue without ever using a slot.
+
+export const MAX_PARALLEL = 3;
+export const MAX_BATCH = 40;
+let slotsInUse = 0;
+const slotQueue = [];
+
+function cancelledError() {
+  const e = new Error('Stopped.');
+  e.cancelled = true;
+  e.kind = 'cancelled';
+  return e;
+}
+
+/** Wait for a free AI slot. Resolves with a release function (call it once). */
+export function acquireSlot(signal) {
+  return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) { reject(cancelledError()); return; }
+    let done = false;
+    const release = () => {
+      if (done) return;
+      done = true;
+      slotsInUse = Math.max(0, slotsInUse - 1);
+      pumpSlots();
+    };
+    const entry = { grant: () => { slotsInUse++; resolve(release); }, signal };
+    if (signal) {
+      signal.addEventListener('abort', () => {
+        const i = slotQueue.indexOf(entry);
+        if (i >= 0) { slotQueue.splice(i, 1); reject(cancelledError()); }
+      }, { once: true });
+    }
+    slotQueue.push(entry);
+    pumpSlots();
+  });
+}
+
+function pumpSlots() {
+  while (slotsInUse < MAX_PARALLEL && slotQueue.length) {
+    const next = slotQueue.shift();
+    if (next.signal && next.signal.aborted) continue;
+    next.grant();
+  }
+}
+
+/** How many boxes are talking to the AI, and how many are waiting. */
+export function slotCounts() { return { running: slotsInUse, waiting: slotQueue.length }; }
+
+/** Only the picture files out of a FileList / array. */
+export function imageFiles(list) {
+  return Array.from(list || []).filter(f => f && /^image\//.test(f.type || ''));
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // Storage
@@ -474,10 +535,10 @@ function createEditor(board, existing) {
 
   const drop = el('div', { class: 'board-drop', tabindex: '0', role: 'button',
     'aria-label': 'Paste, drop or choose a screenshot of the question' });
-  const fileInput = el('input', { type: 'file', accept: 'image/*', class: 'board-file' });
+  const fileInput = el('input', { type: 'file', accept: 'image/*', multiple: '', class: 'board-file' });
   drop.appendChild(el('div', { class: 'board-drop-icon', 'aria-hidden': 'true' }, '📸'));
   drop.appendChild(el('div', { class: 'board-drop-main' }, 'Paste a screenshot of the question'));
-  drop.appendChild(el('div', { class: 'board-drop-sub' }, 'Ctrl+V or ⌘+V, drop it here, or tap to choose one'));
+  drop.appendChild(el('div', { class: 'board-drop-sub' }, 'Ctrl+V or ⌘+V, drop it here, or tap to choose. Pick several to make a box for each.'));
   drop.appendChild(fileInput);
 
   const preview = el('div', { class: 'board-preview', hidden: '' });
@@ -525,6 +586,7 @@ function createEditor(board, existing) {
     drop.classList.toggle('is-disabled', on);
     modelSelect.disabled = on;
     box.querySelectorAll('.board-tweak textarea, .board-tweak button').forEach(n => { n.disabled = on; });
+    board.changed();
   }
 
   function showPreview(dataUrl) {
@@ -765,10 +827,18 @@ function createEditor(board, existing) {
     state.draft = null;
     result.hidden = true;
     setBuilding(true);
-    setStatus('Reading the question…', 'busy');
     const controller = new AbortController();
     state.controller = controller;
+    let release = null;
     try {
+      if (slotCounts().running >= MAX_PARALLEL) setStatus('Waiting for its turn (a few boxes build at a time)…', 'busy');
+      state.waiting = true;
+      board.changed();
+      release = await acquireSlot(controller.signal);
+      state.waiting = false;
+      board.changed();
+      if (state.controller !== controller) return;
+      setStatus('Reading the question…', 'busy');
       const reply = await generateWebapp({
         imageDataUrl: state.image,
         model: state.model,
@@ -825,6 +895,8 @@ function createEditor(board, existing) {
         setStatus(msg, 'error');
       }
     } finally {
+      state.waiting = false;
+      if (release) release();
       if (state.controller === controller) {
         state.controller = null;
         setBuilding(false);
@@ -842,17 +914,23 @@ function createEditor(board, existing) {
     board.closeEditor(box, existing);
   }
 
-  function save() {
-    if (!state.draft || state.building) return;
+  /** The block this box would save, or null (with a message) if it is not ready. */
+  function readyBlock(quiet) {
+    if (!state.draft || state.building) return null;
     const d = state.draft;
     if (!d.questionText.trim()) {
-      setStatus('The question is empty. Type it in the box first.', 'error');
-      return;
+      if (!quiet) setStatus('The question is empty. Type it in the box first.', 'error');
+      return null;
     }
     if (d.type === 'mcq') d.options = d.options.length ? d.options : parseOptions(d.questionText).map(o => '(' + o.label + ') ' + o.text);
     else d.options = [];
     d.updatedAt = Date.now();
-    board.commit(cleanBlock(d), box);
+    return cleanBlock(d);
+  }
+
+  function save() {
+    const block = readyBlock(false);
+    if (block) board.commit(block, box);
   }
 
   // Wire up.
@@ -863,10 +941,22 @@ function createEditor(board, existing) {
   drop.addEventListener('keydown', ev => {
     if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); fileInput.click(); }
   });
+  // Several pictures chosen or dropped here: the first fills this box, the
+  // rest open boxes of their own underneath and build at the same time.
+  function takeMany(list) {
+    const files = imageFiles(list);
+    if (!files.length) {
+      if (list && list.length) setStatus('That is not a picture. Paste or choose a screenshot.', 'error');
+      return;
+    }
+    if (state.building) { board.openWithFiles(files); return; }
+    takeImage(files[0]);
+    if (files.length > 1) board.openWithFiles(files.slice(1));
+  }
   fileInput.addEventListener('change', () => {
-    const f = fileInput.files && fileInput.files[0];
+    const files = Array.from(fileInput.files || []);
     fileInput.value = '';
-    if (f) takeImage(f);
+    if (files.length) takeMany(files);
   });
   ['dragenter', 'dragover'].forEach(t => drop.addEventListener(t, ev => {
     ev.preventDefault();
@@ -875,8 +965,9 @@ function createEditor(board, existing) {
   ['dragleave', 'drop'].forEach(t => drop.addEventListener(t, () => drop.classList.remove('is-over')));
   drop.addEventListener('drop', ev => {
     ev.preventDefault();
-    const f = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
-    if (f) takeImage(f);
+    ev.stopPropagation();
+    const files = ev.dataTransfer && ev.dataTransfer.files ? Array.from(ev.dataTransfer.files) : [];
+    if (files.length) takeMany(files);
   });
   saveBtn.addEventListener('click', save);
   rebuildBtn.addEventListener('click', build);
@@ -893,8 +984,13 @@ function createEditor(board, existing) {
   return {
     box,
     takeImage,
+    readyBlock,
     isBusy: () => state.building,
+    isWaiting: () => !!state.waiting,
+    hasDraft: () => !!state.draft && !state.building,
+    isEmpty: () => !state.image && !state.draft && !state.building,
     focus: () => drop.focus(),
+    cancel: () => { stop(); state.controller = null; },
   };
 }
 
@@ -1022,7 +1118,28 @@ function createSavedBox(board, block, index) {
 
 export function initBoard({ listEl, addBtn, emptyEl }) {
   let blocks = loadBlocks();
-  let activeEditor = null;
+  // Every open box: { editor, existing }. Several can be open and building
+  // at once; acquireSlot keeps at most MAX_PARALLEL talking to the AI.
+  let editors = [];
+
+  const batchEl = document.getElementById('batchStatus');
+  const saveAllBtn = document.getElementById('saveAllReady');
+  const pickManyBtn = document.getElementById('addPictures');
+  const pickManyInput = document.getElementById('addPicturesInput');
+  const blankCountEl = document.getElementById('blankCount');
+  const addBlanksBtn = document.getElementById('addBlanks');
+
+  const entryFor = box => editors.find(e => e.editor && e.editor.box === box);
+  const removeEntry = box => { editors = editors.filter(e => !(e.editor && e.editor.box === box)); };
+
+  function newEntry() {
+    const entry = { editor: null, existing: null };
+    editors.push(entry);
+    return entry;
+  }
+
+  /** Open boxes that hold nothing yet and are not building: reused first. */
+  const idleEmpty = () => editors.filter(e => !e.existing && e.editor && e.editor.isEmpty());
 
   const board = {
     commit(block, editorBox) {
@@ -1032,22 +1149,23 @@ export function initBoard({ listEl, addBtn, emptyEl }) {
       if (i >= 0) next[i] = block; else next.push(block);
       if (!saveBlocks(next)) return;
       blocks = next;
-      activeEditor = null;
+      removeEntry(editorBox);
       render();
       showToast('Saved.', 'success');
       const saved = listEl.querySelector('[data-id="' + CSS.escape(block.id) + '"]');
       if (saved && editorBox) saved.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     },
-    closeEditor() {
-      activeEditor = null;
+    closeEditor(box) {
+      removeEntry(box);
       render();
     },
     edit(block) {
-      if (activeEditor && activeEditor.isBusy()) {
-        showToast('Wait for the box that is building first.', 'info');
+      const open = editors.find(e => e.existing && e.existing.id === block.id);
+      if (open) {
+        if (open.editor) open.editor.box.scrollIntoView({ behavior: 'smooth', block: 'center' });
         return;
       }
-      activeEditor = { editor: null, existing: block };
+      editors.push({ editor: null, existing: block });
       render();
     },
     remove(id) {
@@ -1059,67 +1177,155 @@ export function initBoard({ listEl, addBtn, emptyEl }) {
     getBlocks() { return blocks.slice(); },
     replace(list) {
       blocks = list.slice();
-      // Keep an open editor: re-render leaves it in place.
-      if (activeEditor && activeEditor.existing && !blocks.some(b => b.id === activeEditor.existing.id) &&
-          !(activeEditor.editor && activeEditor.editor.isBusy())) {
-        activeEditor = null;
-      }
+      // A box editing a question that has gone is dropped, unless it is busy.
+      editors = editors.filter(e => !e.existing || blocks.some(b => b.id === e.existing.id) ||
+        (e.editor && e.editor.isBusy()));
       render();
+    },
+    /** Something in a box changed (building, waiting, ready): refresh the bar. */
+    changed() { updateBatch(); },
+    /** One new box per picture; every one starts building straight away. */
+    openWithFiles(list) {
+      const files = imageFiles(list);
+      if (!files.length) return;
+      const room = Math.max(0, MAX_BATCH - editors.length);
+      const reuse = idleEmpty();
+      const usable = reuse.length + room;
+      const take = files.slice(0, usable);
+      if (files.length > take.length) {
+        showToast('Only ' + MAX_BATCH + ' boxes can be open at once. ' +
+          (files.length - take.length) + ' picture(s) were left out.', 'info');
+      }
+      const targets = reuse.slice(0, take.length);
+      while (targets.length < take.length) targets.push(newEntry());
+      render();
+      take.forEach((file, i) => targets[i].editor.takeImage(file));
+      const first = targets[0] && targets[0].editor;
+      if (first) first.box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      if (take.length > 1) showToast(take.length + ' pictures added. They build ' + MAX_PARALLEL + ' at a time.', 'info');
+    },
+    /** n empty boxes, ready for a screenshot each. */
+    openNew(n) {
+      const count = Math.max(1, Math.min(Number(n) || 1, MAX_BATCH - editors.length));
+      if (MAX_BATCH - editors.length <= 0) {
+        showToast('Only ' + MAX_BATCH + ' boxes can be open at once.', 'info');
+        return;
+      }
+      const made = [];
+      for (let i = 0; i < count; i++) made.push(newEntry());
+      render();
+      const first = made[0].editor;
+      first.box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      first.focus();
     },
   };
   activeBoard = board;
 
   function render() {
-    // Keep a live editor (and its in-flight build) when re-rendering.
-    const live = activeEditor && activeEditor.editor ? activeEditor.editor.box : null;
     listEl.innerHTML = '';
     blocks.forEach((block, i) => {
-      if (activeEditor && activeEditor.existing && activeEditor.existing.id === block.id) {
-        if (!activeEditor.editor) activeEditor.editor = createEditor(board, block);
-        listEl.appendChild(activeEditor.editor.box);
+      const entry = editors.find(e => e.existing && e.existing.id === block.id);
+      if (entry) {
+        if (!entry.editor) entry.editor = createEditor(board, block);
+        listEl.appendChild(entry.editor.box);
       } else {
         listEl.appendChild(createSavedBox(board, block, i));
       }
     });
-    if (activeEditor && !activeEditor.existing) {
-      if (!activeEditor.editor) activeEditor.editor = createEditor(board, null);
-      listEl.appendChild(activeEditor.editor.box);
-    }
-    if (live && !live.isConnected) { /* editor was closed */ }
-    emptyEl.hidden = blocks.length > 0 || !!activeEditor;
-    addBtn.hidden = !!activeEditor;
+    editors.forEach(entry => {
+      if (entry.existing && blocks.some(b => b.id === entry.existing.id)) return;
+      if (!entry.editor) entry.editor = createEditor(board, entry.existing);
+      listEl.appendChild(entry.editor.box);
+    });
+    emptyEl.hidden = blocks.length > 0 || editors.length > 0;
+    updateBatch();
   }
 
-  addBtn.addEventListener('click', () => {
-    activeEditor = { editor: null, existing: null };
-    render();
-    activeEditor.editor.box.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    activeEditor.editor.focus();
-  });
+  function readyEditors() {
+    return editors.filter(e => e.editor && e.editor.hasDraft());
+  }
 
-  // A paste anywhere on the page goes into the open box (or opens one).
+  function updateBatch() {
+    const building = editors.filter(e => e.editor && e.editor.isBusy());
+    const waiting = building.filter(e => e.editor.isWaiting()).length;
+    const running = building.length - waiting;
+    const ready = readyEditors().length;
+    if (batchEl) {
+      const bits = [];
+      if (running) bits.push(running + ' building');
+      if (waiting) bits.push(waiting + ' waiting');
+      if (ready) bits.push(ready + ' ready to save');
+      batchEl.textContent = bits.join(' · ');
+      batchEl.hidden = !bits.length;
+    }
+    if (saveAllBtn) {
+      saveAllBtn.hidden = ready < 2;
+      saveAllBtn.textContent = 'Save all ready (' + ready + ')';
+    }
+  }
+
+  function saveAllReady() {
+    const ready = readyEditors();
+    const next = blocks.slice();
+    const done = [];
+    let skipped = 0;
+    ready.forEach(entry => {
+      const block = entry.editor.readyBlock(true);
+      if (!block) { skipped++; return; }
+      const i = next.findIndex(b => b.id === block.id);
+      if (i >= 0) next[i] = block; else next.push(block);
+      done.push(entry.editor.box);
+    });
+    if (!done.length) {
+      showToast('Nothing is ready to save yet.', 'info');
+      return;
+    }
+    if (!saveBlocks(next)) return;
+    blocks = next;
+    done.forEach(removeEntry);
+    render();
+    showToast('Saved ' + done.length + ' question' + (done.length === 1 ? '' : 's') + '.' +
+      (skipped ? ' ' + skipped + ' still need a question typed in.' : ''), 'success');
+  }
+
+  addBtn.addEventListener('click', () => board.openNew(1));
+  if (saveAllBtn) saveAllBtn.addEventListener('click', saveAllReady);
+  if (addBlanksBtn) addBlanksBtn.addEventListener('click', () => board.openNew(blankCountEl ? blankCountEl.value : 1));
+  if (pickManyBtn && pickManyInput) {
+    pickManyBtn.addEventListener('click', () => pickManyInput.click());
+    pickManyInput.addEventListener('change', () => {
+      const files = Array.from(pickManyInput.files || []);
+      pickManyInput.value = '';
+      if (files.length) board.openWithFiles(files);
+    });
+  }
+
+  // Paste: one picture goes into an empty open box if there is one; several
+  // pictures (or no empty box) open a box each.
   document.addEventListener('paste', ev => {
     const target = ev.target;
     if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT')) return;
     const items = ev.clipboardData && ev.clipboardData.items ? Array.from(ev.clipboardData.items) : [];
-    const item = items.find(it => it.kind === 'file' && /^image\//.test(it.type));
-    if (!item) return;
-    const file = item.getAsFile();
-    if (!file) return;
+    const files = items.filter(it => it.kind === 'file' && /^image\//.test(it.type))
+      .map(it => it.getAsFile()).filter(Boolean);
+    if (!files.length) return;
     ev.preventDefault();
-    if (!activeEditor) {
-      activeEditor = { editor: null, existing: null };
-      render();
-    }
-    if (activeEditor.editor.isBusy()) {
-      showToast('This box is still building. Press Stop first.', 'info');
-      return;
-    }
-    activeEditor.editor.takeImage(file);
+    board.openWithFiles(files);
+  });
+
+  // Drop pictures anywhere on the page (boxes handle drops on themselves).
+  document.addEventListener('dragover', ev => {
+    if (ev.dataTransfer && Array.from(ev.dataTransfer.types || []).includes('Files')) ev.preventDefault();
+  });
+  document.addEventListener('drop', ev => {
+    const files = ev.dataTransfer ? imageFiles(ev.dataTransfer.files) : [];
+    if (!files.length) return;
+    ev.preventDefault();
+    board.openWithFiles(files);
   });
 
   window.addEventListener('beforeunload', ev => {
-    if (activeEditor && activeEditor.editor && activeEditor.editor.isBusy()) {
+    if (editors.some(e => e.editor && e.editor.isBusy())) {
       ev.preventDefault();
       ev.returnValue = '';
     }
