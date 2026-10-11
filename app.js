@@ -5,9 +5,9 @@
 
 // Every local import carries ?v=<version>. Bump it on each release so browsers
 // never mix a new index.html with old cached modules.
-import { APP_VERSION, showToast } from './core.js?v=1.5.0';
-import { initBoard, onBlocksSaved, getBoardBlocks, setBoardBlocks } from './board.js?v=1.5.0';
-import { initCloud } from './cloud.js?v=1.5.0';
+import { APP_VERSION, showToast } from './core.js?v=1.5.1';
+import { initBoard, onBlocksSaved, getBoardBlocks, setBoardBlocks } from './board.js?v=1.5.1';
+import { initCloud } from './cloud.js?v=1.5.1';
 
 function start() {
   const badge = document.getElementById('versionBadge');
