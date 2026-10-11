@@ -10,11 +10,11 @@
 // box holds runs in <iframe sandbox="allow-scripts"> with srcdoc: an opaque
 // origin, so a generated app can never read this site's storage or DOM.
 
-import { readStore, writeStore, uid, escapeHtml, el, showToast, readImageFile } from './core.js?v=1.5.0';
-import { generateWebapp, tweakWebapp, saveAiConfig, getAiConfig, MODEL_CHOICES, enhanceDiagram } from './ai.js?v=1.5.0';
-import { SYL_LOS, SYL_LO_BY_ID, SYL_LEVELS } from './syllabus.js?v=1.5.0';
-import { classifyBatch, needsClassify } from './classify.js?v=1.5.0';
-import { printQuestions } from './print.js?v=1.5.0';
+import { readStore, writeStore, uid, escapeHtml, el, showToast, readImageFile } from './core.js?v=1.5.1';
+import { generateWebapp, tweakWebapp, saveAiConfig, getAiConfig, MODEL_CHOICES, enhanceDiagram } from './ai.js?v=1.5.1';
+import { SYL_LOS, SYL_LO_BY_ID, SYL_LEVELS } from './syllabus.js?v=1.5.1';
+import { classifyBatch, needsClassify } from './classify.js?v=1.5.1';
+import { printQuestions } from './print.js?v=1.5.1';
 
 const BLOCKS_KEY = 'vis_blocks';
 const MAX_BLOCKS = 200;
@@ -455,8 +455,31 @@ function preamble(token) {
     '})();';
 }
 
+// Every built app is set in Century Gothic. Century Gothic's question mark
+// is an odd, hooked shape, so ONLY "?" (and the full-width "？") is drawn in
+// Helvetica: the @font-face below covers just those two code points
+// (unicode-range), and the browser takes every other character from the next
+// family in the list. Fonts come from the device only (local()), because a
+// built app may not fetch anything.
+const APP_FONT_STACK = '"VisQMark","Century Gothic",CenturyGothic,"URW Gothic","URW Gothic L",AppleGothic,"Segoe UI",sans-serif';
+const APP_FONT_CSS =
+  '@font-face{font-family:"VisQMark";src:local("Helvetica"),local("Helvetica Neue"),local("HelveticaNeue"),local("Arial");unicode-range:U+003F,U+FF1F;}' +
+  'html,body,body *{font-family:' + APP_FONT_STACK + ' !important;}';
+
+// Text drawn on a <canvas> ignores CSS, so the same stack is put into every
+// ctx.font the app sets: "bold 18px Arial" becomes "bold 18px <stack>".
+function canvasFontPatch() {
+  return '(function(){try{var S=' + JSON.stringify(APP_FONT_STACK) + ';' +
+    'var P=CanvasRenderingContext2D.prototype,d=Object.getOwnPropertyDescriptor(P,"font");' +
+    'if(!d||!d.set)return;' +
+    'Object.defineProperty(P,"font",{configurable:true,get:d.get,set:function(v){' +
+    'var m=String(v).match(/^(.*?\\d*\\.?\\d+(?:px|pt|em|rem|%|vw|vh)(?:\\s*\\/\\s*[^\\s]+)?)\\s+.+$/);' +
+    'd.set.call(this,m?m[1]+" "+S:v);}});}catch(e){}})();';
+}
+
 function frameDocument(html, token) {
-  const tag = '<script>' + preamble(token).replace(/<\/script/gi, '<\\/script') + '</script>';
+  const tag = '<style>' + APP_FONT_CSS + '</style>' +
+    '<script>' + (canvasFontPatch() + preamble(token)).replace(/<\/script/gi, '<\\/script') + '</script>';
   const doc = String(html || '');
   if (/<head[^>]*>/i.test(doc)) return doc.replace(/<head[^>]*>/i, m => m + tag);
   if (/<html[^>]*>/i.test(doc)) return doc.replace(/<html[^>]*>/i, m => m + '<head>' + tag + '</head>');

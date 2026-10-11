@@ -3,8 +3,8 @@
 // The AI server does the sorting (mode 'classify'). When it cannot be reached
 // a keyword match stands in, so every question still gets an objective.
 
-import { SYL_LOS, SYL_LO_BY_ID } from './syllabus.js?v=1.5.0';
-import { classifyQuestions } from './ai.js?v=1.5.0';
+import { SYL_LOS, SYL_LO_BY_ID } from './syllabus.js?v=1.5.1';
+import { classifyQuestions } from './ai.js?v=1.5.1';
 
 export const CLASSIFY_BATCH = 20;
 const MIN_SCORE = 2;
