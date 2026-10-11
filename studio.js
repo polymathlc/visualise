@@ -29,10 +29,10 @@ import {
   mountSandbox,
   readImageFile,
   shrinkImageDataUrl,
-} from './core.js?v=1.5.2';
-import { VISUALISERS, renderVisual } from './visualisers.js?v=1.5.2';
-import { TOPICS, loadParentQuestions, saveParentQuestions } from './questions.js?v=1.5.2';
-import { getAiConfig, saveAiConfig, aiReady, generateVisualiser } from './ai.js?v=1.5.2';
+} from './core.js?v=1.5.3';
+import { VISUALISERS, renderVisual } from './visualisers.js?v=1.5.3';
+import { TOPICS, loadParentQuestions, saveParentQuestions } from './questions.js?v=1.5.3';
+import { getAiConfig, saveAiConfig, aiReady, generateVisualiser } from './ai.js?v=1.5.3';
 
 const AI_MODEL_LABEL = 'gpt-6-luna';
 const QUESTION_IMAGE_MAX_SIDE = 1200;

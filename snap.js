@@ -20,9 +20,9 @@
 import {
   el, uid, showToast, readStore, writeStore, readImageFile, shrinkImageDataUrl,
   STORE_KEYS, escapeHtml,
-} from './core.js?v=1.5.2';
-import { AI_STORE_KEY, aiReady, describeAiRoute, generateWebapp, saveAiConfig } from './ai.js?v=1.5.2';
-import { TOPICS } from './questions.js?v=1.5.2';
+} from './core.js?v=1.5.3';
+import { AI_STORE_KEY, aiReady, describeAiRoute, generateWebapp, saveAiConfig } from './ai.js?v=1.5.3';
+import { TOPICS } from './questions.js?v=1.5.3';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Constants

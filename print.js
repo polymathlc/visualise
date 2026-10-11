@@ -1,4 +1,7 @@
-// print.js — print chosen questions as an A4 worksheet (v1.5.0).
+// print.js — print chosen questions as an A4 worksheet (v1.5.3).
+//
+// Written answers are laid out exam style: blank space for working under each
+// part, then a short "Ans: (a) ____" line at the bottom right of that part.
 //
 // Each page holds ONE large question, or TWO small ones with the second
 // starting exactly half way down. Small or large is MEASURED after the
@@ -44,8 +47,10 @@ export function splitParts(text) {
   return { stem: s.slice(0, marks[0].at).trim(), parts };
 }
 
-function lines(n) {
-  return '<div class="lines">' + '<div class="rule"></div>'.repeat(n) + '</div>';
+/** Working space plus a right-aligned answer line. label = "(a)" or "" for a question with no parts. */
+function answerSpace(label) {
+  return '<div class="work"></div><div class="ans">Ans:' + (label ? ' ' + esc(label) : '') +
+    ' <span class="blank"></span></div>';
 }
 
 /** One question as print HTML. item = { num, stem, options:[{label,text}], diagram, type }. */
@@ -61,12 +66,12 @@ export function questionHtml(item) {
   }
   if (parts.length) {
     for (const p of parts) {
-      h += '<div class="part"><span class="plabel">' + esc(p.label) + '</span><div class="ptext">' + esc(p.text) + '</div></div>';
-      h += mcq ? '' : lines(2);
+      const part = '<div class="part"><span class="plabel">' + esc(p.label) + '</span><div class="ptext">' + esc(p.text) + '</div></div>';
+      h += mcq ? part : '<div class="seg">' + part + answerSpace(p.label) + '</div>';
     }
   }
   if (mcq) h += '<div class="bracket">Answer: (&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;)</div>';
-  else if (!parts.length) h += '<div class="anslabel">Answer:</div>' + lines(3);
+  else if (!parts.length) h += '<div class="seg">' + answerSpace('') + '</div>';
   return h + '</div>';
 }
 
@@ -97,7 +102,8 @@ body { font-family: "Century Gothic", "Nunito", "Segoe UI", Arial, sans-serif; c
 .page { width: 190mm; height: ${PAGE_MM}mm; overflow: hidden; break-after: page; page-break-after: always; display: flex; flex-direction: column; }
 .page:last-child { break-after: auto; page-break-after: auto; }
 .page.full { height: auto; min-height: ${PAGE_MM}mm; overflow: visible; }
-.half { height: ${HALF_MM}mm; overflow: hidden; }
+.half { height: ${HALF_MM}mm; overflow: hidden; display: flex; flex-direction: column; }
+.half > .q, .page.full > .q { flex: 1; display: flex; flex-direction: column; }
 .half + .half { border-top: 1px dashed #bbb; padding-top: 4mm; }
 .q { padding: 2mm 0; }
 .qhead { display: flex; gap: 3mm; }
@@ -111,10 +117,10 @@ body { font-family: "Century Gothic", "Nunito", "Segoe UI", Arial, sans-serif; c
 .opts { list-style: none; margin: 2mm 0 0 10mm; padding: 0; display: grid; gap: 1mm; }
 .part { display: flex; gap: 3mm; margin: 3mm 0 0 10mm; }
 .plabel { font-weight: 700; min-width: 7mm; }
-.lines { margin: 1mm 0 2mm 20mm; }
-.rule { height: 9mm; border-bottom: 1px solid #888; }
-.anslabel { margin: 3mm 0 0 10mm; font-weight: 600; }
-.anslabel + .lines { margin-left: 10mm; }
+.seg { flex: 1; display: flex; flex-direction: column; }
+.work { flex: 1; min-height: 22mm; }
+.ans { text-align: right; font-weight: 600; margin: 1mm 0 2mm; white-space: nowrap; }
+.ans .blank { display: inline-block; width: 42mm; border-bottom: 1px solid #111; margin-left: 2mm; vertical-align: baseline; height: 1.1em; }
 .bracket { text-align: right; margin-top: 4mm; font-weight: 600; }
 .measure { position: absolute; left: -9999px; top: 0; width: 190mm; }
 `;
